@@ -1,0 +1,28 @@
+{
+  "name": "punchcard",
+  "version": "0.1.0",
+  "description": "Local-first project evidence, documentary retrieval, and governed memory for coding agents.",
+  "author": {
+    "name": "Punchcard contributors",
+    "url": "https://github.com/dertin/punchcard"
+  },
+  "homepage": "https://github.com/dertin/punchcard",
+  "repository": "https://github.com/dertin/punchcard",
+  "license": "MIT",
+  "keywords": ["mcp", "memory", "rag", "codegraph", "local-first"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Punchcard",
+    "shortDescription": "Load less context. Punch only what works.",
+    "longDescription": "Bring local documentary retrieval, optional guidance from independently configured CodeGraph, and validation-gated governed memory to Codex.",
+    "developerName": "Punchcard contributors",
+    "category": "Developer Tools",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": [
+      "Prepare a Punchcard deck for this task.",
+      "Find validated history before debugging.",
+      "Validate and punch this implementation."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

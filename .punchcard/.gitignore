@@ -1,0 +1,5 @@
+state.db
+state.db-*
+rag/
+logs/
+backups/

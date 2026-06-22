@@ -1,0 +1,96 @@
+[project]
+name = "punchcard"
+
+[codegraph]
+enabled = true
+
+[rag]
+embedding_model = "nomic-ai/CodeRankEmbed"
+chunk_target_tokens = 500
+chunk_overlap_tokens = 60
+top_k_lexical = 12
+top_k_semantic = 12
+top_k_final = 8
+rrf_k = 60
+
+[[rag.sources]]
+path = "docs"
+authority = "project_docs"
+status = "current"
+
+[[rag.sources]]
+path = "README.md"
+authority = "project_docs"
+status = "current"
+
+[validation]
+required = [
+    "fmt",
+    "check",
+    "test",
+    "clippy",
+]
+
+[validation.commands.check]
+command = [
+    "cargo",
+    "check",
+    "--workspace",
+    "--all-targets",
+]
+timeout_seconds = 900
+level = "static"
+
+[validation.commands.clippy]
+command = [
+    "cargo",
+    "clippy",
+    "--workspace",
+    "--all-targets",
+    "--all-features",
+    "--",
+    "-D",
+    "warnings",
+]
+timeout_seconds = 1800
+level = "static"
+
+[validation.commands.fmt]
+command = [
+    "cargo",
+    "fmt",
+    "--all",
+    "--",
+    "--check",
+]
+timeout_seconds = 120
+level = "static"
+
+[validation.commands.test]
+command = [
+    "cargo",
+    "test",
+    "--workspace",
+]
+timeout_seconds = 1800
+level = "automated"
+
+[security]
+deny_paths = [
+    ".env",
+    ".punchcard/data",
+    ".git",
+    ".codegraph",
+    "target",
+]
+max_document_bytes = 5242880
+
+[logging]
+level = "info"
+rotate_max_bytes = 5242880
+rotate_keep = 3
+
+[logging.decks]
+persist = true
+retention_count = 50
+retention_days = 0

@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "punchcard": {
+      "type": "stdio",
+      "command": "punchcard",
+      "args": [
+        "mcp",
+        "--project-root",
+        "${workspaceFolder}"
+      ]
+    }
+  }
+}

@@ -1,0 +1,39 @@
+[package]
+name = "punchcard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "punchcard"
+path = "src/main.rs"
+
+[[bin]]
+name = "retrieval-eval"
+path = "src/bin/retrieval-eval.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap.workspace = true
+hex.workspace = true
+punchcard-core = { path = "../punchcard-core" }
+punchcard-integrations = { path = "../punchcard-integrations" }
+punchcard-mcp = { path = "../punchcard-mcp" }
+punchcard-memory = { path = "../punchcard-memory" }
+punchcard-rag = { path = "../punchcard-rag" }
+punchcard-rules = { path = "../punchcard-rules" }
+punchcard-security = { path = "../punchcard-security" }
+punchcard-store = { path = "../punchcard-store" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-appender.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

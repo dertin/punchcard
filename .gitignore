@@ -19,3 +19,17 @@ target
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# Punchcard local runtime and release artifacts
+/dist/
+/CHECKSUMS.sha256
+/.punchcard/state.db*
+/.punchcard/rag/
+/.punchcard/logs/
+/.punchcard/backups/
+
+# Benchmarks are excluded from the first commit until the harness matures.
+/benchmarks/
+
+# Internal working notes (TODO / PLAN drafts) are kept local, not published.
+/TODO_MEMORY.md

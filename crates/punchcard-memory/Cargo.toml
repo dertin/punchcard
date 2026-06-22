@@ -1,0 +1,22 @@
+[package]
+name = "punchcard-memory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+chrono.workspace = true
+hex.workspace = true
+punchcard-core = { path = "../punchcard-core" }
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+uuid.workspace = true
+
+[lints]
+workspace = true
