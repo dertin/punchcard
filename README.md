@@ -6,19 +6,17 @@ The system combines cited documentary retrieval, bounded task decks, append-only
 
 Punchcard owns its governed-memory implementation. CodeGraph is an optional independent project: Punchcard can recommend it and validate its public CLI/MCP contract, but does not install, configure, or access its storage.
 
-## Task routing
+## What Punchcard does
 
-Before using tools, pick the cheapest route that still preserves correctness. Routes describe how much Punchcard to use, not where code runs.
+Installing Punchcard adds rules, skills, and an MCP server to your agent (Cursor or Codex). The agent uses them automatically as it works; you don't run them by hand or pick a "mode". What changes is how much context the agent gathers and how it records what it learns:
 
-**Source-only** — you already know which files answer the request. Read in-repo source; no Punchcard retrieval.
+- **Quick, well-scoped questions** — when the relevant files are already known, the agent just reads them. Punchcard stays out of the way and adds no overhead.
+- **Open-ended work** (debugging, refactors, exploring unfamiliar code) — Punchcard builds a bounded evidence deck: cited documentary retrieval over your docs and code, plus relevant past decisions. The agent grounds its work in real source instead of guessing, while staying within a token budget.
+- **Changes that should outlive the session** — Punchcard records them as project memory only after your configured validations (format, build, tests, lint) pass on the same code. Failed attempts stay in searchable history; they never become current knowledge.
 
-**Discover** — scope, cause, requirements, or blast radius are still open. Call `context_prepare` once, expand only gaps named by the deck, then read exact source.
+The result is more accurate, better-grounded agent work with less wasted context, and a memory of decisions and constraints that future sessions can recall.
 
-**Implement** — same as Discover, plus a material change that must be recorded as validated memory (`change_begin`, allowlisted validation, `change_promote`).
-
-If unsure between source-only and Discover, choose Discover. If the change must outlive the session, use Implement. Do not duplicate `context_prepare` with `rag_search` or `memory_search` unless the deck shows a specific gap.
-
-Full request-type tables, MCP order, and setup steps live in generated `punchcard.md` and `.cursor/rules/punchcard.mdc`.
+The exact policy that drives this behavior lives in the generated `punchcard.md` and `.cursor/rules/punchcard.mdc`; you normally never edit these.
 
 ## Setup
 
