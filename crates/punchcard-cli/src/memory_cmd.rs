@@ -2,7 +2,7 @@
 //!
 //! These commands manage the ephemeral coordination layer (sessions, tasks, and
 //! observations). Promotion to durable governed memory still flows through
-//! `change begin` → validation → `card punch`.
+//! `change begin` → validation → `change promote`.
 
 use anyhow::Result;
 use clap::{Subcommand, ValueEnum};

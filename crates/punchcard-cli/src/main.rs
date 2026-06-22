@@ -68,16 +68,6 @@ enum Command {
         #[command(subcommand)]
         command: DeckCommand,
     },
-    /// Inspect or punch a card.
-    Card {
-        #[command(subcommand)]
-        command: CardCommand,
-    },
-    /// Search archived and rejected cards.
-    Archive {
-        #[command(subcommand)]
-        command: ArchiveCommand,
-    },
     /// Search or inspect governed memory.
     Memory {
         #[command(subcommand)]
@@ -214,38 +204,6 @@ enum DeckCommand {
 }
 
 #[derive(Debug, Clone, Subcommand)]
-enum CardCommand {
-    /// Show one card.
-    Show {
-        /// Card ID.
-        id: String,
-    },
-    /// Promote a validated change into active memory.
-    Punch(PunchArgs),
-}
-
-#[derive(Debug, Clone, Subcommand)]
-enum ArchiveCommand {
-    /// Search historical, rejected, superseded, and invalidated cards.
-    Search {
-        /// Search query.
-        query: String,
-        /// Maximum results.
-        #[arg(long, default_value_t = 8)]
-        limit: usize,
-    },
-}
-
-#[derive(Debug, Clone, Args)]
-struct PunchArgs {
-    /// Change intent ID.
-    change_id: String,
-    /// Repository-relative files associated with the implementation.
-    #[arg(long = "file")]
-    files: Vec<PathBuf>,
-}
-
-#[derive(Debug, Clone, Subcommand)]
 enum MemoryCommand {
     /// Search active and possibly stale cards.
     Search {
@@ -264,8 +222,8 @@ enum MemoryCommand {
         #[arg(long, default_value_t = 8)]
         limit: usize,
     },
-    /// Show one card by ID.
-    Show {
+    /// Fetch one memory card by ID.
+    Get {
         /// Card ID.
         id: String,
         /// Return evidence refs, file hashes, and other audit metadata.
@@ -385,10 +343,21 @@ enum ExportFormat {
 
 #[derive(Debug, Clone, Subcommand)]
 enum ChangeCommand {
-    /// Open a blank card/change intent.
+    /// Open a change intent.
     Begin(ChangeBeginArgs),
     /// Record a failed or interrupted attempt without replacing active memory.
     Fail(ChangeFailArgs),
+    /// Promote a validated change into active memory.
+    Promote(ChangePromoteArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+struct ChangePromoteArgs {
+    /// Change intent ID.
+    change_id: String,
+    /// Repository-relative files associated with the implementation.
+    #[arg(long = "file")]
+    files: Vec<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -545,8 +514,6 @@ async fn main() -> Result<()> {
         Command::Init(arguments) => command_init(&cli, &arguments)?,
         Command::Rag { command } => command_rag(&cli, command).await?,
         Command::Deck { command } => command_deck(&cli, command).await?,
-        Command::Card { command } => command_card(&cli, command)?,
-        Command::Archive { command } => command_archive(&cli, command)?,
         Command::Memory { command } => command_memory(&cli, command)?,
         Command::Session { command } => memory_cmd::command_session(&cli, command)?,
         Command::Task { command } => memory_cmd::command_task(&cli, command)?,
@@ -706,39 +673,6 @@ async fn command_deck(cli: &Cli, command: DeckCommand) -> Result<()> {
     Ok(())
 }
 
-fn command_card(cli: &Cli, command: CardCommand) -> Result<()> {
-    let context = open_project(cli)?;
-    match command {
-        CardCommand::Show { id } => {
-            let id = CardId::parse(id)?;
-            let card = context.store.get_card(&id)?;
-            print_serializable(cli.json, &memory_search_hit(&context, card))?;
-        }
-        CardCommand::Punch(arguments) => {
-            let change_id = ChangeId::parse(arguments.change_id)?;
-            let intent = context.store.get_change(&change_id)?;
-            let validations = context.store.validations_for_change(&change_id)?;
-            let active_cards = context.store.active_cards_for_change(&intent)?;
-            let files = fingerprint_files(&context.root, &arguments.files)?;
-            let card = prepare_promotion(&intent, &validations, &active_cards, files)?;
-            context.store.promote_card(&change_id, &card, Actor::Cli)?;
-            print_serializable(cli.json, &card)?;
-        }
-    }
-    Ok(())
-}
-
-fn command_archive(cli: &Cli, command: ArchiveCommand) -> Result<()> {
-    let context = open_project(cli)?;
-    match command {
-        ArchiveCommand::Search { query, limit } => {
-            let cards = context.store.search_archive(&context.id, &query, limit)?;
-            print_serializable(cli.json, &cards)?;
-        }
-    }
-    Ok(())
-}
-
 fn command_memory_projects(cli: &Cli, context: &ProjectContext) -> Result<()> {
     let projects = context.store.list_projects()?;
     print_value(
@@ -772,7 +706,7 @@ fn command_memory(cli: &Cli, command: MemoryCommand) -> Result<()> {
             };
             print_memory_recall_hits(cli, &context, cards, full)?;
         }
-        MemoryCommand::Show { id, full } => {
+        MemoryCommand::Get { id, full } => {
             let card = context.store.get_card(&CardId::parse(id)?)?;
             let hit = memory_search_hit(&context, card);
             if full {
@@ -917,6 +851,16 @@ fn command_change(cli: &Cli, command: ChangeCommand) -> Result<()> {
                 cli.json,
                 &serde_json::json!({"change_id": change_id, "status": status}),
             );
+        }
+        ChangeCommand::Promote(arguments) => {
+            let change_id = ChangeId::parse(arguments.change_id)?;
+            let intent = context.store.get_change(&change_id)?;
+            let validations = context.store.validations_for_change(&change_id)?;
+            let active_cards = context.store.active_cards_for_change(&intent)?;
+            let files = fingerprint_files(&context.root, &arguments.files)?;
+            let card = prepare_promotion(&intent, &validations, &active_cards, files)?;
+            context.store.promote_card(&change_id, &card, Actor::Cli)?;
+            print_serializable(cli.json, &card)?;
         }
     }
     Ok(())
@@ -1713,8 +1657,6 @@ const fn command_name(command: &Command) -> &'static str {
         Command::Init(_) => "init",
         Command::Rag { .. } => "rag",
         Command::Deck { .. } => "deck",
-        Command::Card { .. } => "card",
-        Command::Archive { .. } => "archive",
         Command::Memory { .. } => "memory",
         Command::Session { .. } => "session",
         Command::Task { .. } => "task",

@@ -177,7 +177,7 @@ See [Documentary retrieval](rag.md) for model profiles and indexing workflow.
 
 | Key | Type | Default (Rust) | Description |
 | --- | --- | --- | --- |
-| `required` | string list | `fmt`, `check`, `test`, `clippy` | Names that must pass before `punchcard card punch` |
+| `required` | string list | `fmt`, `check`, `test`, `clippy` | Names that must pass before `punchcard change promote` |
 | `commands.<name>` | table | see example | Allowlisted executable definitions |
 
 #### `[validation.commands.<name>]`

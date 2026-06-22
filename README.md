@@ -69,10 +69,10 @@ punchcard validate fmt --change-id <change-id>
 punchcard validate check --change-id <change-id>
 punchcard validate test --change-id <change-id>
 punchcard validate clippy --change-id <change-id>
-punchcard card punch <change-id> --file src/lib.rs
+punchcard change promote <change-id> --file src/lib.rs
 ```
 
-Other useful commands: `rag search`, `memory search`, `archive search`, `stats`, `doctor`.
+Other useful commands: `rag search`, `memory search`, `memory search --archive`, `stats`, `doctor`.
 
 ## Documentation
 

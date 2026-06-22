@@ -28,7 +28,7 @@ and validation-gated transitions.
 | `context_prepare` | Active memory + docs in one deck | Discover / Implement; once per task |
 | `memory_search` | Active (+ optional archive) | Deck memory gap, recall, overlap checks; compact hits (`title`, `summary`, freshness) |
 | `memory_get` | One card + freshness | After search or known card id; `detail=full` only for evidence refs and file hashes |
-| `punchcard archive search` | Failed / superseded / etc. | CLI; MCP uses `memory_search` with `include_archive` |
+| `punchcard memory search --archive` | Failed / superseded / etc. | Same scope as MCP `memory_search` with `include_archive` |
 
 Associated file hashes are checked during retrieval. A mismatch yields
 `possibly_stale` without silently invalidating the card. `memory_review` can
@@ -98,7 +98,7 @@ deletion), with `--dry-run` previews.
 ## Promotion policy
 
 Punchcard promotes findings to active memory only after allowlisted validation
-on the same working tree. Use `change_fail` and archive search for failed
+on the same working tree. Use `change_fail` and `memory search --archive` for failed
 attempts instead of writing unvalidated facts into active memory.
 
 ## Export and integrity
