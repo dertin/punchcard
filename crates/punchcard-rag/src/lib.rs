@@ -45,9 +45,10 @@ const VECTOR_TABLE: &str = "chunks";
 const MODEL_MARKER: &str = "model-ready";
 const CODE_MODEL_REVISION: &str = "e74f446dc6e67e29fcee77213472c142f73a6bbb";
 const CODE_MODEL_REPOSITORY: &str = "mrsladoje/CodeRankEmbed-onnx-int8";
+const CODE_MODEL_ONNX_FILE: &str = "onnx/model.onnx";
 const CODE_MODEL_FILES: [(&str, &str); 5] = [
     (
-        "model.onnx",
+        CODE_MODEL_ONNX_FILE,
         "4eae31d09b1843103a1ebd5e2b2e24b5a5cad441a33906b35b12b1e2ed91d1db",
     ),
     (
@@ -69,9 +70,10 @@ const CODE_MODEL_FILES: [(&str, &str); 5] = [
 ];
 const FAST_MODEL_REVISION: &str = "761b726dd34fb83930e26aab4e9ac3899aa1fa78";
 const FAST_MODEL_REPOSITORY: &str = "Xenova/multilingual-e5-small";
+const FAST_MODEL_ONNX_FILE: &str = "onnx/model_int8.onnx";
 const FAST_MODEL_FILES: [(&str, &str); 5] = [
     (
-        "onnx/model_int8.onnx",
+        FAST_MODEL_ONNX_FILE,
         "4d24e2bc01a447951524466ef533e52944bf48509e6552810bcee1a2711cb02c",
     ),
     (
@@ -106,6 +108,7 @@ struct EmbeddingModelSpec {
     repository: &'static str,
     revision: &'static str,
     files: &'static [(&'static str, &'static str)],
+    onnx_file: &'static str,
     dimensions: usize,
     max_length: usize,
     query_prefix: &'static str,
@@ -120,6 +123,7 @@ const CODE_MODEL: EmbeddingModelSpec = EmbeddingModelSpec {
     repository: CODE_MODEL_REPOSITORY,
     revision: CODE_MODEL_REVISION,
     files: &CODE_MODEL_FILES,
+    onnx_file: CODE_MODEL_ONNX_FILE,
     dimensions: 768,
     max_length: 8_192,
     query_prefix: "Represent this query for searching relevant code: ",
@@ -134,6 +138,7 @@ const FAST_MODEL: EmbeddingModelSpec = EmbeddingModelSpec {
     repository: FAST_MODEL_REPOSITORY,
     revision: FAST_MODEL_REVISION,
     files: &FAST_MODEL_FILES,
+    onnx_file: FAST_MODEL_ONNX_FILE,
     dimensions: 384,
     max_length: 512,
     query_prefix: "query: ",
@@ -875,7 +880,7 @@ fn embed_texts(
         EmbeddingBackend::UserDefinedE5 => {
             let tokenizer_files = tokenizer_files(&snapshot)?;
             let user_model = UserDefinedEmbeddingModel::new(
-                read_model_file(&snapshot.join("onnx/model_int8.onnx"))?,
+                read_model_file(&snapshot.join(spec.onnx_file))?,
                 tokenizer_files,
             )
             .with_quantization(QuantizationMode::Dynamic)
@@ -888,7 +893,7 @@ fn embed_texts(
         EmbeddingBackend::UserDefinedCodeRank => {
             let tokenizer_files = tokenizer_files(&snapshot)?;
             let mut user_model = UserDefinedEmbeddingModel::new(
-                read_model_file(&snapshot.join("model.onnx"))?,
+                read_model_file(&snapshot.join(spec.onnx_file))?,
                 tokenizer_files,
             )
             .with_quantization(QuantizationMode::Dynamic);
@@ -1551,6 +1556,7 @@ pub enum RagError {
 mod tests {
     use std::collections::HashMap;
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::symlink;
     use std::path::Path;
     use std::sync::Arc;
@@ -1566,11 +1572,22 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CODE_EMBEDDING_MODEL, FAST_EMBEDDING_MODEL, IndexFileResult, chunk_document, embed_texts,
-        embedding_profile, embedding_profiles, index_file, model_for_profile, model_marker,
-        reciprocal_rank_fusion, redact_secrets, remove_vector_index, rerank_by_query_terms,
-        source_drift, status,
+        CODE_EMBEDDING_MODEL, CODE_MODEL, FAST_EMBEDDING_MODEL, FAST_MODEL, IndexFileResult,
+        chunk_document, embed_texts, embedding_profile, embedding_profiles, index_file,
+        model_for_profile, model_marker, reciprocal_rank_fusion, redact_secrets,
+        remove_vector_index, rerank_by_query_terms, source_drift, status,
     };
+
+    #[test]
+    fn embedding_profiles_download_the_onnx_file_they_load() {
+        for model in [CODE_MODEL, FAST_MODEL] {
+            assert!(
+                model.files.iter().any(|(path, _)| *path == model.onnx_file),
+                "{} does not download its configured ONNX file",
+                model.model_id
+            );
+        }
+    }
 
     #[test]
     fn chunking_preserves_heading_and_line_citations() {
@@ -1651,6 +1668,7 @@ mod tests {
         assert!(!redacted.contains("FAKEPUNCHCARDTOKEN"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn vector_cleanup_rejects_symlinked_index_directory() {
         let temporary = tempdir().expect("temporary directory should exist");

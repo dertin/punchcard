@@ -499,11 +499,27 @@ fn set_codex_plugin_enabled(
     plugin_status(Agent::Codex, project_root)
 }
 
+/// Returns whether `command` resolves to an executable file on `PATH`.
+#[must_use]
+pub fn executable_on_path(command: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|directory| executable_in_directory(&directory, command))
+    })
+}
+
+fn executable_in_directory(directory: &Path, command: &str) -> bool {
+    if directory.join(command).is_file() {
+        return true;
+    }
+    #[cfg(windows)]
+    if directory.join(format!("{command}.exe")).is_file() {
+        return true;
+    }
+    false
+}
+
 fn ensure_punchcard_on_path() -> Result<(), IntegrationError> {
-    let available = std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|path| path.join("punchcard").is_file())
-    });
-    if available {
+    if executable_on_path("punchcard") {
         Ok(())
     } else {
         Err(IntegrationError::PunchcardNotOnPath)
@@ -754,6 +770,24 @@ fn write_with_backup(
     atomic_write(path, content)
 }
 
+/// Recreates a symlink across platforms.
+///
+/// Windows distinguishes between file and directory symlinks, so the resolved
+/// target kind selects the correct call there.
+#[cfg(unix)]
+fn create_symlink(target: &Path, link: &Path, _target_is_dir: bool) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn create_symlink(target: &Path, link: &Path, target_is_dir: bool) -> std::io::Result<()> {
+    if target_is_dir {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
 fn copy_private_path(
     project_root: &Path,
     source: &Path,
@@ -774,7 +808,8 @@ fn copy_private_path(
         if let Some(parent) = destination.parent() {
             create_private_dir(project_root, parent)?;
         }
-        std::os::unix::fs::symlink(target, destination).map_err(|source_error| {
+        let target_is_dir = std::fs::metadata(source).is_ok_and(|resolved| resolved.is_dir());
+        create_symlink(&target, destination, target_is_dir).map_err(|source_error| {
             IntegrationError::Write {
                 path: destination.to_path_buf(),
                 source: source_error,
@@ -1198,6 +1233,7 @@ pub enum IntegrationError {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
     use std::process::Command;
 
@@ -1264,6 +1300,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn init_rejects_symlinked_data_directory() {
         let temporary = tempdir().expect("temporary directory should exist");
@@ -1278,6 +1315,7 @@ mod tests {
         assert!(error.to_string().contains("symlink"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn init_restricts_project_data_directory_permissions() {
         let temporary = tempdir().expect("temporary directory should exist");

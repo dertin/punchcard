@@ -2,6 +2,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
@@ -12,6 +13,36 @@ pub const REDACTED_SECRET: &str = "[REDACTED SECRET-LIKE CONTENT]";
 
 const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
+
+/// Builds write options for a private file, requesting `0600` on Unix.
+///
+/// On non-Unix platforms the requested mode is ignored because that permission
+/// model does not exist there.
+fn private_write_options(truncate: bool) -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(truncate);
+    apply_private_mode(&mut options, PRIVATE_FILE_MODE);
+    options
+}
+
+/// Restricts a path to the current user on Unix; a no-op on other platforms.
+#[cfg(unix)]
+fn set_private_permissions(path: &Path, mode: u32) -> std::io::Result<()> {
+    fs::set_permissions(path, fs::Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn set_private_permissions(_path: &Path, _mode: u32) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(unix)]
+fn apply_private_mode(options: &mut OpenOptions, mode: u32) {
+    options.mode(mode);
+}
+
+#[cfg(not(unix))]
+fn apply_private_mode(_options: &mut OpenOptions, _mode: u32) {}
 
 /// Rejects paths outside a project root or containing an existing symlink.
 ///
@@ -86,11 +117,12 @@ pub fn create_private_dir(root: &Path, path: &Path) -> Result<(), SecurityError>
     for component in relative.components() {
         if let Component::Normal(segment) = component {
             current.push(segment);
-            fs::set_permissions(&current, fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE))
-                .map_err(|source| SecurityError::SetPermissions {
+            set_private_permissions(&current, PRIVATE_DIRECTORY_MODE).map_err(|source| {
+                SecurityError::SetPermissions {
                     path: current.clone(),
                     source,
-                })?;
+                }
+            })?;
         }
     }
     Ok(())
@@ -106,16 +138,13 @@ pub fn create_private_dir(root: &Path, path: &Path) -> Result<(), SecurityError>
 /// cannot be restricted to the current user.
 pub fn prepare_private_file(root: &Path, path: &Path) -> Result<(), SecurityError> {
     ensure_project_path(root, path)?;
-    OpenOptions::new()
-        .write(true)
-        .create(true)
-        .mode(PRIVATE_FILE_MODE)
+    private_write_options(false)
         .open(path)
         .map_err(|source| SecurityError::OpenFile {
             path: path.to_path_buf(),
             source,
         })?;
-    fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_FILE_MODE)).map_err(|source| {
+    set_private_permissions(path, PRIVATE_FILE_MODE).map_err(|source| {
         SecurityError::SetPermissions {
             path: path.to_path_buf(),
             source,
@@ -147,23 +176,20 @@ pub fn write_private_file(root: &Path, path: &Path, content: &[u8]) -> Result<()
 /// fails.
 pub fn write_private_file_unscoped(path: &Path, content: &[u8]) -> Result<(), SecurityError> {
     reject_symlink(path)?;
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(PRIVATE_FILE_MODE)
-        .open(path)
-        .map_err(|source| SecurityError::OpenFile {
-            path: path.to_path_buf(),
-            source,
-        })?;
+    let mut file =
+        private_write_options(true)
+            .open(path)
+            .map_err(|source| SecurityError::OpenFile {
+                path: path.to_path_buf(),
+                source,
+            })?;
     file.write_all(content)
         .and_then(|()| file.sync_all())
         .map_err(|source| SecurityError::WriteFile {
             path: path.to_path_buf(),
             source,
         })?;
-    fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_FILE_MODE)).map_err(|source| {
+    set_private_permissions(path, PRIVATE_FILE_MODE).map_err(|source| {
         SecurityError::SetPermissions {
             path: path.to_path_buf(),
             source,
@@ -193,12 +219,12 @@ pub fn harden_private_tree(root: &Path, path: &Path) -> Result<(), SecurityError
         return Err(SecurityError::Symlink(path.to_path_buf()));
     }
     if metadata.is_dir() {
-        fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_DIRECTORY_MODE)).map_err(
-            |source| SecurityError::SetPermissions {
+        set_private_permissions(path, PRIVATE_DIRECTORY_MODE).map_err(|source| {
+            SecurityError::SetPermissions {
                 path: path.to_path_buf(),
                 source,
-            },
-        )?;
+            }
+        })?;
         for entry in fs::read_dir(path).map_err(|source| SecurityError::Inspect {
             path: path.to_path_buf(),
             source,
@@ -210,12 +236,12 @@ pub fn harden_private_tree(root: &Path, path: &Path) -> Result<(), SecurityError
             harden_private_tree(root, &entry.path())?;
         }
     } else {
-        fs::set_permissions(path, fs::Permissions::from_mode(PRIVATE_FILE_MODE)).map_err(
-            |source| SecurityError::SetPermissions {
+        set_private_permissions(path, PRIVATE_FILE_MODE).map_err(|source| {
+            SecurityError::SetPermissions {
                 path: path.to_path_buf(),
                 source,
-            },
-        )?;
+            }
+        })?;
     }
     Ok(())
 }
@@ -473,16 +499,19 @@ pub enum SecurityError {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
 
+    #[cfg(unix)]
     use tempfile::tempdir;
 
-    use super::{
-        REDACTED_SECRET, create_private_dir, ensure_project_path, redact_secret_like_lines,
-        write_private_file,
-    };
+    use super::{REDACTED_SECRET, redact_secret_like_lines};
+    #[cfg(unix)]
+    use super::{create_private_dir, ensure_project_path, write_private_file};
 
+    #[cfg(unix)]
     #[test]
     fn ensure_project_path_rejects_symlinked_component() {
         let temporary = tempdir().expect("temporary directory should exist");
@@ -500,6 +529,7 @@ mod tests {
         assert!(error.to_string().contains("symlink"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn private_artifacts_are_restricted_to_current_user() {
         let temporary = tempdir().expect("temporary directory should exist");

@@ -1537,6 +1537,7 @@ fn truncate_chars(value: &str, maximum: usize) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
 
     use chrono::Utc;
@@ -1598,6 +1599,7 @@ mod tests {
         assert!(enabled);
     }
 
+    #[cfg(unix)]
     #[test]
     fn open_rejects_symlinked_database_file() {
         let temporary = tempdir().expect("temporary directory should exist");
@@ -1613,6 +1615,7 @@ mod tests {
         assert!(matches!(error, StoreError::Security(_)));
     }
 
+    #[cfg(unix)]
     #[test]
     fn open_restricts_database_file_permissions() {
         let temporary = tempdir().expect("temporary directory should exist");

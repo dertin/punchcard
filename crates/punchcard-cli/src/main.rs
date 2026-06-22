@@ -16,7 +16,8 @@ use punchcard_core::{
 use punchcard_integrations::{
     Agent,
     config_lint::lint_project_config,
-    cursor_plugin_is_symlink, find_git_root, init_project_with_model, install_plugin, load_config,
+    cursor_plugin_is_symlink, executable_on_path, find_git_root, init_project_with_model,
+    install_plugin, load_config,
     logging::{persist_deck_log, prepare_tracing_log, prune_runtime_logs, runtime_log_storage},
     plugin_status, resolve_state_db_path, run_validation, set_plugin_enabled,
     set_rag_embedding_model, uninstall_plugin, upgrade_plugin,
@@ -975,7 +976,7 @@ fn command_doctor(cli: &Cli) -> Result<()> {
                 "warning"
             },
             detail: version.unwrap_or_else(|| format!("{name} is not available on PATH")),
-            remediation: (!command_on_path(name))
+            remediation: (!executable_on_path(name))
                 .then(|| format!("Install `{name}` and ensure it is available on PATH.")),
         });
     }
@@ -1039,7 +1040,7 @@ fn command_doctor(cli: &Cli) -> Result<()> {
         remediation: Some("Back up .punchcard and restore from a verified export.".to_owned()),
     });
 
-    let punchcard_on_path = command_on_path("punchcard");
+    let punchcard_on_path = executable_on_path("punchcard");
     checks.push(DoctorCheck {
         name: "punchcard_on_path".to_owned(),
         status: if punchcard_on_path { "ok" } else { "warning" },
@@ -1822,12 +1823,6 @@ fn resolve_source(root: &Path, source: &Path) -> PathBuf {
     }
 }
 
-fn command_on_path(command: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|paths| {
-        std::env::split_paths(&paths).any(|directory| directory.join(command).is_file())
-    })
-}
-
 fn command_version(command: &str) -> Option<String> {
     let output = std::process::Command::new(command)
         .arg("--version")
@@ -1885,7 +1880,7 @@ fn codegraph_doctor_check(root: &Path, enabled: bool) -> DoctorCheck {
             remediation: None,
         };
     }
-    if !command_on_path("codegraph") {
+    if !executable_on_path("codegraph") {
         return DoctorCheck {
             name: "codegraph".to_owned(),
             status: "warning",
