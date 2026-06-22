@@ -1171,6 +1171,36 @@ pub struct MemorySearchHit {
     pub changed_files: Vec<PathBuf>,
 }
 
+/// Compact governed-memory hit for routine agent retrieval.
+///
+/// Exposes the knowledge-bearing fields from [`MemorySearchHit`] without
+/// evidence references, file hashes, or other audit metadata. Request the full
+/// envelope with `memory_get` and `detail=full` when those fields are needed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MemoryRecallHit {
+    /// Card identity for `memory_get` follow-up.
+    pub id: CardId,
+    /// Searchable headline.
+    pub title: String,
+    /// Bounded factual statement and primary knowledge field.
+    pub summary: String,
+    /// Detailed memory category.
+    pub memory_kind: MemoryKind,
+    /// Current technical state.
+    pub status: CardStatus,
+    /// Whether associated repository evidence changed or disappeared.
+    pub possibly_stale: bool,
+    /// Repository-relative paths that no longer match promoted evidence.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub changed_files: Vec<PathBuf>,
+    /// Owning repository display name for sibling-project cards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_name: Option<String>,
+    /// Canonical root of the owning repository for sibling-project cards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_root: Option<PathBuf>,
+}
+
 /// Shared domain failures.
 #[derive(Debug, Error)]
 pub enum DomainError {

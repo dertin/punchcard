@@ -11,14 +11,14 @@ searchable; never active.
 
 ## Retrieve
 
-Discover/Implement: `context_prepare` once. `memory_search` / `memory_get` on:
-deck memory gap; user recalls past work; overlap with prior decisions; before
-`supersedes`; retry after failure (`include_archive: true`).
+Discover/Implement: `context_prepare` once. `memory_search`/`memory_get` return compact
+hits; read `summary` first. Use `memory_get` + `detail=full` only for evidence refs and
+file hashes. Fan out on deck gaps, recall, overlap, or retries with `include_archive`.
 
 ## Workspace (shared `state_db`)
 
 With a shared `state_db`, `memory_search(include_workspace: true)` searches every
-project; hits carry `project_name` / `project_root` / `is_current_project`.
+project; sibling hits include `project_name` and `project_root`.
 `context_prepare` may add a small `workspace` section pointing at sibling repos
 with task-relevant memory or referenced in docs — **leads, not facts**: fan out
 with `memory_search --workspace` only on a real gap. Promote only in the repo you
@@ -26,7 +26,7 @@ are editing.
 
 ## Forget (codebase)
 
-`memory_forget` defaults to `dry_run: true`. Preview first; prefer `memory_review(stale)` when history still matters. Single-card invalidate needs exact `card_title`.
+`memory_forget` defaults to `dry_run: true`; prefer `memory_review(stale)` when history still matters.
 
 ## Store (Implement)
 

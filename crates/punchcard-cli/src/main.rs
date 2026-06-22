@@ -23,7 +23,8 @@ use punchcard_integrations::{
     set_rag_embedding_model, uninstall_plugin, upgrade_plugin,
 };
 use punchcard_memory::{
-    WorkspacePointerInput, memory_search_hit_for_card, prepare_promotion, workspace_pointers,
+    WorkspacePointerInput, memory_recall_hit, memory_search_hit_for_card, prepare_promotion,
+    workspace_pointers,
 };
 use punchcard_security::{
     create_private_dir, ensure_project_path, prepare_private_file, write_private_file_unscoped,
@@ -261,6 +262,9 @@ enum MemoryCommand {
         /// Search every project registered in a shared `state_db`.
         #[arg(long)]
         workspace: bool,
+        /// Return evidence refs, file hashes, and other audit metadata.
+        #[arg(long)]
+        full: bool,
         /// Maximum results.
         #[arg(long, default_value_t = 8)]
         limit: usize,
@@ -269,6 +273,9 @@ enum MemoryCommand {
     Show {
         /// Card ID.
         id: String,
+        /// Return evidence refs, file hashes, and other audit metadata.
+        #[arg(long)]
+        full: bool,
     },
     /// List cards by status, newest first.
     List {
@@ -500,6 +507,27 @@ fn memory_search_hit(
         &context.config.project.name,
         |project_id| context.store.get_project(project_id).ok().flatten(),
     )
+}
+
+fn print_memory_recall_hits(
+    cli: &Cli,
+    context: &ProjectContext,
+    cards: Vec<punchcard_core::Card>,
+    full: bool,
+) -> Result<()> {
+    if full {
+        let hits: Vec<_> = cards
+            .into_iter()
+            .map(|card| memory_search_hit(context, card))
+            .collect();
+        print_serializable(cli.json, &hits)
+    } else {
+        let hits: Vec<_> = cards
+            .into_iter()
+            .map(|card| memory_recall_hit(&memory_search_hit(context, card)))
+            .collect();
+        print_serializable(cli.json, &hits)
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -744,6 +772,7 @@ fn command_memory(cli: &Cli, command: MemoryCommand) -> Result<()> {
             query,
             archive,
             workspace,
+            full,
             limit,
         } => {
             let cards = if workspace {
@@ -755,15 +784,16 @@ fn command_memory(cli: &Cli, command: MemoryCommand) -> Result<()> {
                     .store
                     .search_cards(&context.id, &query, archive, limit)?
             };
-            let hits: Vec<_> = cards
-                .into_iter()
-                .map(|card| memory_search_hit(&context, card))
-                .collect();
-            print_serializable(cli.json, &hits)?;
+            print_memory_recall_hits(cli, &context, cards, full)?;
         }
-        MemoryCommand::Show { id } => {
+        MemoryCommand::Show { id, full } => {
             let card = context.store.get_card(&CardId::parse(id)?)?;
-            print_serializable(cli.json, &memory_search_hit(&context, card))?;
+            let hit = memory_search_hit(&context, card);
+            if full {
+                print_serializable(cli.json, &hit)?;
+            } else {
+                print_serializable(cli.json, &memory_recall_hit(&hit))?;
+            }
         }
         MemoryCommand::List { status, limit } => {
             let statuses = status

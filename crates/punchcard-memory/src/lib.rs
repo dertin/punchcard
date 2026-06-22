@@ -7,8 +7,8 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use punchcard_core::{
-    Card, CardId, CardStatus, ChangeIntent, DeckItem, FileFingerprint, MemorySearchHit, ProjectId,
-    ProjectRecord, ValidationEvidence, ValidationStatus,
+    Card, CardId, CardStatus, ChangeIntent, DeckItem, FileFingerprint, MemoryRecallHit,
+    MemorySearchHit, ProjectId, ProjectRecord, ValidationEvidence, ValidationStatus,
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -331,6 +331,27 @@ pub fn memory_search_hit_for_card(
         project_lookup,
     );
     memory_search_hit(card, current_project_id, project_name, &project_root)
+}
+
+/// Projects a full search hit into the compact recall shape for agent retrieval.
+#[must_use]
+pub fn memory_recall_hit(hit: &MemorySearchHit) -> MemoryRecallHit {
+    let card = &hit.card;
+    MemoryRecallHit {
+        id: card.id.clone(),
+        title: card.title.clone(),
+        summary: card.summary.clone(),
+        memory_kind: card.memory_kind,
+        status: card.status,
+        possibly_stale: hit.possibly_stale,
+        changed_files: if hit.possibly_stale {
+            hit.changed_files.clone()
+        } else {
+            Vec::new()
+        },
+        project_name: (!hit.is_current_project).then(|| hit.project_name.clone()),
+        project_root: (!hit.is_current_project).then(|| hit.project_root.clone()),
+    }
 }
 
 fn resolve_card_project(
@@ -772,5 +793,39 @@ mod tests {
         assert!(!hit.is_current_project);
         assert_eq!(hit.project_name, "owner");
         assert!(!hit.possibly_stale);
+    }
+
+    #[test]
+    fn recall_hit_keeps_knowledge_fields_and_drops_audit_metadata() {
+        let temporary = tempfile::tempdir().expect("temporary directory should exist");
+        let hit = super::memory_search_hit(
+            Card {
+                id: CardId::new(),
+                project_id: ProjectId::from_persisted("p".to_owned()),
+                kind: CardKind::Implementation,
+                memory_kind: MemoryKind::Implementation,
+                title: "Fix snapshot path".to_owned(),
+                summary: "What: fix path\nWhy: 404".to_owned(),
+                status: CardStatus::Active,
+                source_refs: vec!["change:abc".to_owned()],
+                evidence_refs: vec![ValidationId::new()],
+                valid_from: Some(Utc::now()),
+                valid_until: None,
+                supersedes: None,
+                associated_files: Vec::new(),
+            },
+            &ProjectId::from_persisted("p".to_owned()),
+            "punchcard".to_owned(),
+            temporary.path(),
+        );
+
+        let recall = super::memory_recall_hit(&hit);
+
+        assert_eq!(recall.title, "Fix snapshot path");
+        assert_eq!(recall.summary, "What: fix path\nWhy: 404");
+        assert!(!recall.possibly_stale);
+        assert!(recall.changed_files.is_empty());
+        assert!(recall.project_name.is_none());
+        assert!(recall.project_root.is_none());
     }
 }

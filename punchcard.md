@@ -76,7 +76,8 @@ When the Punchcard MCP server is available, prefer these tools over duplicate CL
 
 - `context_prepare` — bounded evidence deck for the task; pass `session_id` or `task_id` to seed it with recent working notes; with a shared `state_db` it may add a small `workspace` section pointing at sibling repos with task-relevant memory (leads only, not facts)
 - `rag_get` — expand one documentary chunk identified by the deck
-- `memory_search` / `memory_list` — search or list governed memory when the deck shows a memory gap; set `include_archive` when retrying failed attempts; set `include_workspace` when several repos share one `state_db` (hits include `project_root` and `is_current_project`)
+- `memory_search` / `memory_get` — compact recall by default (`id`, `title`, `summary`, freshness); `memory_get` with `detail=full` for evidence refs and file hashes
+- `memory_list` — list governed cards by status when the deck shows a memory gap
 - `memory_projects` — list every project registered in the shared database with its repository root
 - `memory_forget` — preview and invalidate active/stale cards (`dry_run` defaults to true); requires `card_title` when forgetting by id
 - `memory_review` — confirm, mark stale, or invalidate one card (requires `card_title`)

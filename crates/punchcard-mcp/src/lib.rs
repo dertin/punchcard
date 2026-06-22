@@ -6,13 +6,14 @@ use std::time::Instant;
 use chrono::Utc;
 use punchcard_core::{
     Actor, Card, CardId, CardKind, CardStatus, ChangeId, ChangeIntent, Deck, DeckId, DeckItem,
-    DocumentChunk, FileFingerprint, MemoryKind, MemoryReviewAction, MemorySearchHit,
-    ObservationKind, ProjectConfig, ProjectId, ProjectRecord, RagSearchHit, Session, SessionId,
-    Task, TaskId, TaskObservation, ValidationEvidence,
+    DocumentChunk, FileFingerprint, MemoryKind, MemoryRecallHit, MemoryReviewAction,
+    MemorySearchHit, ObservationKind, ProjectConfig, ProjectId, ProjectRecord, RagSearchHit,
+    Session, SessionId, Task, TaskId, TaskObservation, ValidationEvidence,
 };
 use punchcard_integrations::{find_git_root, load_config, resolve_state_db_path, run_validation};
 use punchcard_memory::{
-    WorkspacePointerInput, memory_search_hit_for_card, prepare_promotion, workspace_pointers,
+    WorkspacePointerInput, memory_recall_hit, memory_search_hit_for_card, prepare_promotion,
+    workspace_pointers,
 };
 use punchcard_store::{GovernedForgetRequest, Store, format_task_summary_text};
 use rmcp::{
@@ -124,6 +125,28 @@ struct SearchInput {
 struct IdInput {
     /// Stable card, chunk, or change identifier.
     id: String,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct MemoryGetInput {
+    /// Stable card identifier.
+    id: String,
+    /// Set to `full` for evidence refs, associated file hashes, and timestamps.
+    detail: Option<String>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct MemoryGetOutput {
+    /// Compact recall fields for routine use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recall: Option<MemoryRecallHit>,
+    /// Full card and freshness envelope when `detail=full`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    full: Option<MemorySearchHit>,
+}
+
+fn wants_full_detail(detail: Option<&str>) -> bool {
+    detail.is_some_and(|value| value.eq_ignore_ascii_case("full"))
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -273,8 +296,8 @@ struct RagSearchOutput {
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 struct MemorySearchOutput {
-    /// Matching governed cards.
-    cards: Vec<MemorySearchHit>,
+    /// Matching governed cards in compact recall form.
+    cards: Vec<MemoryRecallHit>,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -738,7 +761,7 @@ impl PunchcardServer {
         Ok(Json(output))
     }
 
-    /// Search active governed project memory. Archive content is not injected and no state is modified.
+    /// Search active governed project memory. Returns compact recall hits; use `memory_get` with `detail=full` for evidence refs and file hashes.
     #[tool(
         name = "memory_search",
         annotations(
@@ -779,6 +802,7 @@ impl PunchcardServer {
             cards: cards
                 .into_iter()
                 .map(|card| memory_search_hit(&project, &self.root, card))
+                .map(|hit| memory_recall_hit(&hit))
                 .collect(),
         };
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
@@ -792,7 +816,7 @@ impl PunchcardServer {
         Ok(Json(output))
     }
 
-    /// Read one governed memory card and report whether its associated files may be stale.
+    /// Read one governed memory card. Default: compact recall (`id`, `title`, `summary`, freshness). Set `detail=full` for evidence refs and file hashes.
     #[tool(
         name = "memory_get",
         annotations(
@@ -805,8 +829,8 @@ impl PunchcardServer {
     )]
     async fn memory_get(
         &self,
-        Parameters(input): Parameters<IdInput>,
-    ) -> Result<Json<MemorySearchHit>, String> {
+        Parameters(input): Parameters<MemoryGetInput>,
+    ) -> Result<Json<MemoryGetOutput>, String> {
         let started = Instant::now();
         let project = self.project()?;
         let id = CardId::parse(input.id).map_err(|error| error.to_string())?;
@@ -815,9 +839,20 @@ impl PunchcardServer {
             .get_card(&id)
             .map_err(|error| error.to_string())?;
         let hit = memory_search_hit(&project, &self.root, card);
-        let bytes = serde_json::to_vec(&hit).map_or(0, |value| value.len());
+        let response = if wants_full_detail(input.detail.as_deref()) {
+            MemoryGetOutput {
+                recall: None,
+                full: Some(hit),
+            }
+        } else {
+            MemoryGetOutput {
+                recall: Some(memory_recall_hit(&hit)),
+                full: None,
+            }
+        };
+        let bytes = serde_json::to_vec(&response).map_or(0, |value| value.len());
         record_tool(&project, "memory_get", started, 1, bytes);
-        Ok(Json(hit))
+        Ok(Json(response))
     }
 
     /// Create an append-only draft change record. This does not activate or replace current project memory.

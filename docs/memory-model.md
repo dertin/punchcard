@@ -26,8 +26,8 @@ and validation-gated transitions.
 | Mechanism | Scope | When |
 | --- | --- | --- |
 | `context_prepare` | Active memory + docs in one deck | Discover / Implement; once per task |
-| `memory_search` | Active (+ optional archive) | Deck memory gap, recall, overlap checks |
-| `memory_get` | One card + freshness | After search or known card id |
+| `memory_search` | Active (+ optional archive) | Deck memory gap, recall, overlap checks; compact hits (`title`, `summary`, freshness) |
+| `memory_get` | One card + freshness | After search or known card id; `detail=full` only for evidence refs and file hashes |
 | `punchcard archive search` | Failed / superseded / etc. | CLI; MCP uses `memory_search` with `include_archive` |
 
 Associated file hashes are checked during retrieval. A mismatch yields
