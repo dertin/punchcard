@@ -12,8 +12,8 @@ bundle files, but those files are generated artifacts, not independent sources.
 Regenerate or verify every owned artifact with:
 
 ```bash
-punchcard agent-assets sync
-punchcard agent-assets check
+./scripts/agent-assets.sh sync
+./scripts/agent-assets.sh check
 ```
 
 `sync` renders plugin bundles, the Cursor always-on rule, and `punchcard.md`.

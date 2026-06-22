@@ -57,6 +57,13 @@ pub struct InitOutcome {
     pub codegraph_initialized: bool,
 }
 
+/// Returns true when `root` is the Punchcard development repository.
+#[must_use]
+pub fn is_punchcard_development_repo(root: &Path) -> bool {
+    root.join("crates/punchcard-rules/Cargo.toml").is_file()
+        && root.join("crates/punchcard-cli/Cargo.toml").is_file()
+}
+
 /// Finds the nearest Git repository root.
 ///
 /// # Errors
@@ -1241,9 +1248,34 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        find_git_root, init_project, init_project_with_model, load_config, plugin_tree_digest,
-        run_validation, set_rag_embedding_model, set_toml_table_bool, working_tree_hash,
+        find_git_root, init_project, init_project_with_model, is_punchcard_development_repo,
+        load_config, plugin_tree_digest, run_validation, set_rag_embedding_model,
+        set_toml_table_bool, working_tree_hash,
     };
+
+    #[test]
+    fn development_repo_detection_requires_punchcard_crates() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        assert!(!is_punchcard_development_repo(temporary.path()));
+
+        fs::create_dir_all(temporary.path().join("crates/punchcard-rules"))
+            .expect("rules crate directory should be created");
+        fs::write(
+            temporary.path().join("crates/punchcard-rules/Cargo.toml"),
+            "[package]\nname = \"punchcard-rules\"\n",
+        )
+        .expect("rules manifest should be written");
+        assert!(!is_punchcard_development_repo(temporary.path()));
+
+        fs::create_dir_all(temporary.path().join("crates/punchcard-cli"))
+            .expect("cli crate directory should be created");
+        fs::write(
+            temporary.path().join("crates/punchcard-cli/Cargo.toml"),
+            "[package]\nname = \"punchcard\"\n",
+        )
+        .expect("cli manifest should be written");
+        assert!(is_punchcard_development_repo(temporary.path()));
+    }
 
     #[test]
     fn plugin_tree_digest_changes_when_plugin_content_changes() {

@@ -14,6 +14,10 @@ path = "src/main.rs"
 name = "retrieval-eval"
 path = "src/bin/retrieval-eval.rs"
 
+[[bin]]
+name = "agent-assets"
+path = "src/bin/agent-assets.rs"
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true

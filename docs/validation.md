@@ -24,7 +24,7 @@ project configuration.
 
 It then runs the runtime smoke checks that matter for Punchcard itself:
 
-- `punchcard agent-assets check`
+- `./scripts/agent-assets.sh check`
 - `cargo test -p punchcard-mcp stdio_protocol_lists_vertical_slice_tools`
 - `punchcard plugin status`
 - `punchcard rag sync`

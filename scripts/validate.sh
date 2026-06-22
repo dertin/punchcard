@@ -10,7 +10,7 @@ cargo check --workspace --all-targets
 cargo test --workspace
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-cargo run --quiet --bin punchcard -- agent-assets check
+./scripts/agent-assets.sh check
 cargo test -p punchcard-mcp stdio_protocol_lists_vertical_slice_tools
 
 cargo run --quiet --bin punchcard -- plugin status

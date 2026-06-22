@@ -17,7 +17,7 @@ use punchcard_integrations::{
     Agent,
     config_lint::lint_project_config,
     cursor_plugin_is_symlink, executable_on_path, find_git_root, init_project_with_model,
-    install_plugin, load_config,
+    install_plugin, is_punchcard_development_repo, load_config,
     logging::{persist_deck_log, prepare_tracing_log, prune_runtime_logs, runtime_log_storage},
     plugin_status, resolve_state_db_path, run_validation, set_plugin_enabled,
     set_rag_embedding_model, uninstall_plugin, upgrade_plugin,
@@ -106,11 +106,6 @@ enum Command {
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
-    },
-    /// Generate or verify agent integration files from the canonical policy.
-    AgentAssets {
-        #[command(subcommand)]
-        command: AgentAssetsCommand,
     },
     /// Report local project metrics.
     Stats,
@@ -481,14 +476,6 @@ enum PluginCommand {
     },
 }
 
-#[derive(Debug, Clone, Copy, Subcommand)]
-enum AgentAssetsCommand {
-    /// Render all owned Cursor and Codex integration files.
-    Sync,
-    /// Fail when an owned integration file differs from its canonical render.
-    Check,
-}
-
 struct ProjectContext {
     root: PathBuf,
     id: ProjectId,
@@ -567,7 +554,6 @@ async fn main() -> Result<()> {
         Command::Validate(arguments) => command_validate(&cli, arguments).await?,
         Command::Doctor => command_doctor(&cli)?,
         Command::Plugin { command } => command_plugin(&cli, command)?,
-        Command::AgentAssets { command } => command_agent_assets(&cli, command)?,
         Command::Stats => command_stats(&cli)?,
         Command::Logs { command } => command_logs(&cli, command)?,
         Command::Mcp => punchcard_mcp::serve(project_start(&cli)?).await?,
@@ -983,6 +969,7 @@ async fn command_validate(cli: &Cli, arguments: ValidateArgs) -> Result<()> {
 )]
 fn command_doctor(cli: &Cli) -> Result<()> {
     let context = open_project(cli)?;
+    let development_repo = is_punchcard_development_repo(&context.root);
     let mut checks = Vec::new();
 
     let (ubuntu_supported, ubuntu_detail) = ubuntu_24_04_status();
@@ -1079,8 +1066,13 @@ fn command_doctor(cli: &Cli) -> Result<()> {
         } else {
             "punchcard is not available on PATH".to_owned()
         },
-        remediation: (!punchcard_on_path)
-            .then(|| "Run `cargo install --path crates/punchcard-cli --locked`.".to_owned()),
+        remediation: (!punchcard_on_path).then(|| {
+            if development_repo {
+                "Run `cargo install --path crates/punchcard-cli --locked`.".to_owned()
+            } else {
+                "Install punchcard and ensure it is on PATH; see docs/setup.md.".to_owned()
+            }
+        }),
     });
 
     checks.push(codegraph_doctor_check(
@@ -1206,17 +1198,20 @@ fn command_doctor(cli: &Cli) -> Result<()> {
         }),
     });
 
-    let cursor_rule = context.root.join(".cursor/rules/punchcard.mdc");
-    let cursor_rule_valid = std::fs::read_to_string(&cursor_rule)
-        .is_ok_and(|content| content == punchcard_rules::render_cursor_rule());
-    checks.push(DoctorCheck {
-        name: "cursor_rule".to_owned(),
-        status: if cursor_rule_valid { "ok" } else { "warning" },
-        detail: cursor_rule.display().to_string(),
-        remediation: (!cursor_rule_valid).then(|| {
-            "Run `punchcard agent-assets sync` to refresh generated integration files.".to_owned()
-        }),
-    });
+    if development_repo {
+        let cursor_rule = context.root.join(".cursor/rules/punchcard.mdc");
+        let cursor_rule_valid = std::fs::read_to_string(&cursor_rule)
+            .is_ok_and(|content| content == punchcard_rules::render_cursor_rule());
+        checks.push(DoctorCheck {
+            name: "cursor_rule".to_owned(),
+            status: if cursor_rule_valid { "ok" } else { "warning" },
+            detail: cursor_rule.display().to_string(),
+            remediation: (!cursor_rule_valid).then(|| {
+                "Run `./scripts/agent-assets.sh sync` to refresh generated integration files."
+                    .to_owned()
+            }),
+        });
+    }
 
     match context.store.session_list(&context.id, 1) {
         Ok(sessions) => {
@@ -1276,8 +1271,19 @@ fn command_doctor(cli: &Cli) -> Result<()> {
                         "warning"
                     },
                     detail: status.detail,
-                    remediation: (!status.installed)
-                        .then(|| format!("Run `punchcard plugin install {}`.", status.agent)),
+                    remediation: (!status.installed).then(|| {
+                        if development_repo {
+                            format!(
+                                "Run `punchcard plugin install {} --local-source ./plugins`.",
+                                status.agent
+                            )
+                        } else {
+                            format!(
+                                "Run `punchcard plugin install {}` with a plugin bundle path; see docs/plugins.md.",
+                                status.agent
+                            )
+                        }
+                    }),
                 });
                 if agent == Agent::Cursor
                     && status.installed
@@ -1287,10 +1293,13 @@ fn command_doctor(cli: &Cli) -> Result<()> {
                         name: "cursor_plugin_layout".to_owned(),
                         status: "warning",
                         detail: "Cursor plugin is installed as a symlink; Cursor 3.5+ rejects symlink targets outside ~/.cursor/plugins/local".to_owned(),
-                        remediation: Some(
+                        remediation: Some(if development_repo {
                             "Run `punchcard plugin upgrade cursor --local-source ./plugins`."
-                                .to_owned(),
-                        ),
+                                .to_owned()
+                        } else {
+                            "Reinstall the Cursor plugin with `punchcard plugin install cursor` and a plugin bundle path."
+                                .to_owned()
+                        }),
                     });
                 }
             }
@@ -1298,50 +1307,61 @@ fn command_doctor(cli: &Cli) -> Result<()> {
                 name: format!("{agent:?}_plugin").to_ascii_lowercase(),
                 status: "warning",
                 detail: error.to_string(),
-                remediation: Some(format!(
-                    "Run `punchcard plugin install {}`.",
-                    format!("{agent:?}").to_ascii_lowercase()
-                )),
+                remediation: Some(if development_repo {
+                    format!(
+                        "Run `punchcard plugin install {} --local-source ./plugins`.",
+                        format!("{agent:?}").to_ascii_lowercase()
+                    )
+                } else {
+                    format!(
+                        "Run `punchcard plugin install {}` with a plugin bundle path; see docs/plugins.md.",
+                        format!("{agent:?}").to_ascii_lowercase()
+                    )
+                }),
             }),
         }
     }
-    let expected_version = env!("CARGO_PKG_VERSION");
-    let plugin_manifests = [
-        context
-            .root
-            .join("plugins/cursor/.cursor-plugin/plugin.json"),
-        context
-            .root
-            .join("plugins/punchcard/.codex-plugin/plugin.json"),
-    ];
-    let plugin_versions = plugin_manifests
-        .iter()
-        .map(|path| {
-            std::fs::read_to_string(path)
-                .ok()
-                .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
-                .and_then(|manifest| {
-                    manifest
-                        .get("version")
-                        .and_then(serde_json::Value::as_str)
-                        .map(ToOwned::to_owned)
-                })
-                .unwrap_or_else(|| "missing".to_owned())
-        })
-        .collect::<Vec<_>>();
-    let plugins_compatible = plugin_versions
-        .iter()
-        .all(|version| version == expected_version);
-    checks.push(DoctorCheck {
-        name: "plugin_compatibility".to_owned(),
-        status: if plugins_compatible { "ok" } else { "warning" },
-        detail: format!(
-            "binary {expected_version}; cursor {}; codex {}",
-            plugin_versions[0], plugin_versions[1]
-        ),
-        remediation: (!plugins_compatible)
-            .then(|| "Run `punchcard plugin upgrade all --local-source ./plugins`.".to_owned()),
-    });
+    if development_repo {
+        let expected_version = env!("CARGO_PKG_VERSION");
+        let plugin_manifests = [
+            context
+                .root
+                .join("plugins/cursor/.cursor-plugin/plugin.json"),
+            context
+                .root
+                .join("plugins/punchcard/.codex-plugin/plugin.json"),
+        ];
+        let plugin_versions = plugin_manifests
+            .iter()
+            .map(|path| {
+                std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok())
+                    .and_then(|manifest| {
+                        manifest
+                            .get("version")
+                            .and_then(serde_json::Value::as_str)
+                            .map(ToOwned::to_owned)
+                    })
+                    .unwrap_or_else(|| "missing".to_owned())
+            })
+            .collect::<Vec<_>>();
+        let plugins_compatible = plugin_versions
+            .iter()
+            .all(|version| version == expected_version);
+        checks.push(DoctorCheck {
+            name: "plugin_compatibility".to_owned(),
+            status: if plugins_compatible { "ok" } else { "warning" },
+            detail: format!(
+                "binary {expected_version}; cursor {}; codex {}",
+                plugin_versions[0], plugin_versions[1]
+            ),
+            remediation: (!plugins_compatible).then(|| {
+                "Run `./scripts/agent-assets.sh sync` and `punchcard plugin upgrade all --local-source ./plugins`."
+                    .to_owned()
+            }),
+        });
+    }
 
     let errors = checks
         .iter()
@@ -1429,62 +1449,6 @@ fn command_plugin(cli: &Cli, command: PluginCommand) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn command_agent_assets(cli: &Cli, command: AgentAssetsCommand) -> Result<()> {
-    let root = find_git_root(&project_start(cli)?)?;
-    let assets = punchcard_rules::render_agent_assets();
-
-    match command {
-        AgentAssetsCommand::Sync => {
-            for asset in &assets {
-                write_agent_asset(&root, asset.path, &asset.content)?;
-            }
-            print_value(
-                cli.json,
-                &serde_json::json!({
-                    "status": "synced",
-                    "files": assets.len(),
-                    "source": "crates/punchcard-rules/assets",
-                }),
-            );
-        }
-        AgentAssetsCommand::Check => {
-            let stale = assets
-                .iter()
-                .filter_map(|asset| {
-                    let path = root.join(asset.path);
-                    (std::fs::read_to_string(path).ok().as_deref() != Some(&asset.content))
-                        .then_some(asset.path)
-                })
-                .collect::<Vec<_>>();
-            if !stale.is_empty() {
-                bail!(
-                    "generated agent assets are stale: {}; run `punchcard agent-assets sync`",
-                    stale.join(", ")
-                );
-            }
-            print_value(
-                cli.json,
-                &serde_json::json!({
-                    "status": "current",
-                    "files": assets.len(),
-                    "source": "crates/punchcard-rules/assets",
-                }),
-            );
-        }
-    }
-    Ok(())
-}
-
-fn write_agent_asset(root: &Path, relative: &str, content: &str) -> Result<()> {
-    let path = root.join(relative);
-    ensure_project_path(root, &path)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    std::fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))
 }
 
 fn command_stats(cli: &Cli) -> Result<()> {
@@ -1758,7 +1722,6 @@ const fn command_name(command: &Command) -> &'static str {
         Command::Validate(_) => "validate",
         Command::Doctor => "doctor",
         Command::Plugin { .. } => "plugin",
-        Command::AgentAssets { .. } => "agent-assets",
         Command::Stats => "stats",
         Command::Logs { .. } => "logs",
         Command::Mcp => "mcp",

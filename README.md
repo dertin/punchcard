@@ -48,12 +48,15 @@ punchcard plugin install all --local-source ./plugins
 punchcard plugin status
 ```
 
-Agent policy is authored in `crates/punchcard-rules/assets`. Regenerate bundles with:
+For repository development, agent policy is authored in
+`crates/punchcard-rules/assets`. Regenerate bundles with:
 
 ```bash
-punchcard agent-assets sync
-punchcard agent-assets check
+./scripts/agent-assets.sh sync
+./scripts/agent-assets.sh check
 ```
+
+`./scripts/validate.sh` runs the check as part of the full validation pass.
 
 For agents without a packaged plugin, see [Ecosystem compatibility](docs/compatibility.md).
 

@@ -6,7 +6,7 @@ memory skills, and the plugin manifest.
 
 The skills, hooks, manifest, and generated `punchcard.md` instructions are rendered from
 `crates/punchcard-rules/assets`. Do not edit generated copies directly; run
-`punchcard agent-assets sync` after changing the canonical source.
+`./scripts/agent-assets.sh sync` after changing the canonical source.
 
 The repository marketplace is `.agents/plugins/marketplace.json`.
 

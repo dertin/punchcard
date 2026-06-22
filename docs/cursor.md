@@ -11,7 +11,7 @@ The Cursor plugin lives in `plugins/cursor` and contains:
 The rule, skills, commands, hooks, and manifest are generated from
 `crates/punchcard-rules/assets` and mirrored into the plugin bundle for Cursor.
 Do not edit those copies directly; run
-`punchcard agent-assets sync` after changing the canonical source.
+`./scripts/agent-assets.sh sync` after changing the canonical source.
 
 Local installation copies the repository plugin into
 `~/.cursor/plugins/local/punchcard`. Cursor 3.5+ rejects symlinked local
