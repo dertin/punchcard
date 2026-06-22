@@ -2005,6 +2005,10 @@ fn punchcard_configuration_conflicts(root: &Path) -> Vec<String> {
                         conflicts.push(
                             ".cursor/mcp.json defines a conflicting punchcard server".to_owned(),
                         );
+                    } else {
+                        conflicts.push(
+                            ".cursor/mcp.json duplicates the Cursor plugin MCP; remove it when using `punchcard plugin install cursor`".to_owned(),
+                        );
                     }
                 }
             }
