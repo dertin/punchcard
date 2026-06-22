@@ -213,16 +213,15 @@ pub fn upgrade_plugin(
     local_plugins: &Path,
 ) -> Result<PluginStatus, IntegrationError> {
     if agent == Agent::Codex {
-        let marketplace = marketplace_name(project_root)?;
         let _ = run_external(
             "codex",
             &[
                 "plugin",
                 "remove",
-                &format!("punchcard@{marketplace}"),
+                &codex_plugin_selector(),
                 "--json",
             ],
-            project_root,
+            &codex_marketplace_root()?,
             true,
         )?;
     }
@@ -237,30 +236,11 @@ pub fn upgrade_plugin(
 /// agent CLI rejects removal.
 pub fn uninstall_plugin(
     agent: Agent,
-    project_root: &Path,
+    _project_root: &Path,
 ) -> Result<PluginStatus, IntegrationError> {
     match agent {
         Agent::Cursor => uninstall_cursor_plugin(),
-        Agent::Codex => {
-            let marketplace = marketplace_name(project_root)?;
-            let output = run_external(
-                "codex",
-                &[
-                    "plugin",
-                    "remove",
-                    &format!("punchcard@{marketplace}"),
-                    "--json",
-                ],
-                project_root,
-                true,
-            )?;
-            Ok(PluginStatus {
-                agent: "codex".to_owned(),
-                installed: false,
-                enabled: false,
-                detail: bounded_output(&output),
-            })
-        }
+        Agent::Codex => uninstall_codex_plugin(),
     }
 }
 
@@ -286,7 +266,7 @@ pub fn set_plugin_enabled(
 /// # Errors
 ///
 /// Returns [`IntegrationError`] when local paths or the Codex CLI cannot be read.
-pub fn plugin_status(agent: Agent, project_root: &Path) -> Result<PluginStatus, IntegrationError> {
+pub fn plugin_status(agent: Agent, _project_root: &Path) -> Result<PluginStatus, IntegrationError> {
     match agent {
         Agent::Cursor => {
             let path = cursor_plugin_path()?;
@@ -303,9 +283,22 @@ pub fn plugin_status(agent: Agent, project_root: &Path) -> Result<PluginStatus, 
             })
         }
         Agent::Codex => {
-            let marketplace = marketplace_name(project_root)?;
-            let output = run_external("codex", &["plugin", "list", "--json"], project_root, false)?;
-            let selector = format!("punchcard@{marketplace}");
+            let marketplace_root = codex_marketplace_root()?;
+            if !codex_marketplace_manifest_path(&marketplace_root).is_file() {
+                return Ok(PluginStatus {
+                    agent: "codex".to_owned(),
+                    installed: false,
+                    enabled: false,
+                    detail: "Codex plugin is not installed".to_owned(),
+                });
+            }
+            let output = run_external(
+                "codex",
+                &["plugin", "list", "--json"],
+                &marketplace_root,
+                false,
+            )?;
+            let selector = codex_plugin_selector();
             let document: serde_json::Value = serde_json::from_slice(&output.stdout)?;
             let entry = document
                 .get("installed")
@@ -396,42 +389,73 @@ fn install_codex_plugin(
     source: &Path,
 ) -> Result<PluginStatus, IntegrationError> {
     validate_manifest(source, ".codex-plugin/plugin.json")?;
-    let marketplace = marketplace_name(project_root)?;
-    let marketplace_list = run_external(
-        "codex",
-        &["plugin", "marketplace", "list"],
-        project_root,
-        false,
-    )?;
-    let root_text = project_root.to_string_lossy();
-    if !String::from_utf8_lossy(&marketplace_list.stdout).contains(root_text.as_ref()) {
-        run_external(
-            "codex",
-            &[
-                "plugin",
-                "marketplace",
-                "add",
-                project_root.to_string_lossy().as_ref(),
-            ],
-            project_root,
-            false,
-        )?;
+    let source = source
+        .canonicalize()
+        .map_err(|source_error| IntegrationError::Canonicalize {
+            path: source.to_path_buf(),
+            source: source_error,
+        })?;
+    let marketplace_root = codex_marketplace_root()?;
+    let destination = codex_plugin_install_path()?;
+    if destination.symlink_metadata().is_ok() {
+        let metadata = destination
+            .symlink_metadata()
+            .map_err(|source| IntegrationError::Read {
+                path: destination.clone(),
+                source,
+            })?;
+        if metadata.file_type().is_symlink() {
+            backup_existing(project_root, &destination, "codex-plugin-punchcard")?;
+            remove_owned_path(&destination)?;
+        } else if metadata.is_dir()
+            && plugin_tree_digest(&destination)? == plugin_tree_digest(&source)?
+        {
+            ensure_global_codex_marketplace_manifest()?;
+            register_codex_marketplace(&marketplace_root)?;
+            return plugin_status(Agent::Codex, project_root);
+        } else {
+            backup_existing(project_root, &destination, "codex-plugin-punchcard")?;
+            remove_owned_path(&destination)?;
+        }
     }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| IntegrationError::CreateDirectory {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    copy_plugin_tree(&source, &destination)?;
+    ensure_global_codex_marketplace_manifest()?;
+    register_codex_marketplace(&marketplace_root)?;
     let output = run_external(
         "codex",
-        &[
-            "plugin",
-            "add",
-            &format!("punchcard@{marketplace}"),
-            "--json",
-        ],
-        project_root,
+        &["plugin", "add", &codex_plugin_selector(), "--json"],
+        &marketplace_root,
         false,
     )?;
     Ok(PluginStatus {
         agent: "codex".to_owned(),
         installed: true,
         enabled: true,
+        detail: bounded_output(&output),
+    })
+}
+
+fn uninstall_codex_plugin() -> Result<PluginStatus, IntegrationError> {
+    let marketplace_root = codex_marketplace_root()?;
+    let output = run_external(
+        "codex",
+        &["plugin", "remove", &codex_plugin_selector(), "--json"],
+        &marketplace_root,
+        true,
+    )?;
+    if marketplace_root.symlink_metadata().is_ok() {
+        remove_owned_path(&marketplace_root)?;
+    }
+    Ok(PluginStatus {
+        agent: "codex".to_owned(),
+        installed: false,
+        enabled: false,
         detail: bounded_output(&output),
     })
 }
@@ -487,8 +511,7 @@ fn set_codex_plugin_enabled(
     project_root: &Path,
     enabled: bool,
 ) -> Result<PluginStatus, IntegrationError> {
-    let marketplace = marketplace_name(project_root)?;
-    let selector = format!("punchcard@{marketplace}");
+    let selector = codex_plugin_selector();
     if !plugin_status(Agent::Codex, project_root)?.installed {
         return Err(IntegrationError::PluginNotInstalled("codex".to_owned()));
     }
@@ -566,20 +589,94 @@ fn codex_config_path() -> Result<PathBuf, IntegrationError> {
     Ok(base.home_dir().join(".codex/config.toml"))
 }
 
-fn marketplace_name(project_root: &Path) -> Result<String, IntegrationError> {
-    let path = project_root.join(".agents/plugins/marketplace.json");
-    let value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&path).map_err(|source| {
-            IntegrationError::Read {
-                path: path.clone(),
-                source,
+const CODEX_MARKETPLACE_NAME: &str = "punchcard";
+
+fn codex_plugin_selector() -> String {
+    format!("punchcard@{CODEX_MARKETPLACE_NAME}")
+}
+
+fn codex_marketplace_root() -> Result<PathBuf, IntegrationError> {
+    let base = directories::BaseDirs::new().ok_or(IntegrationError::HomeDirectoryUnavailable)?;
+    Ok(base.home_dir().join(".codex/plugins/punchcard"))
+}
+
+fn codex_plugin_install_path() -> Result<PathBuf, IntegrationError> {
+    Ok(codex_marketplace_root()?.join("punchcard"))
+}
+
+fn codex_marketplace_manifest_path(marketplace_root: &Path) -> PathBuf {
+    marketplace_root.join(".agents/plugins/marketplace.json")
+}
+
+fn codex_marketplace_manifest() -> serde_json::Value {
+    serde_json::json!({
+        "name": CODEX_MARKETPLACE_NAME,
+        "interface": {
+            "displayName": "Punchcard"
+        },
+        "plugins": [
+            {
+                "name": "punchcard",
+                "source": {
+                    "source": "local",
+                    "path": "./punchcard"
+                },
+                "policy": {
+                    "installation": "AVAILABLE",
+                    "authentication": "ON_INSTALL"
+                },
+                "category": "Developer Tools"
             }
-        })?)?;
-    value
-        .get("name")
-        .and_then(serde_json::Value::as_str)
-        .map(ToOwned::to_owned)
-        .ok_or(IntegrationError::ConfigurationConflict(path))
+        ]
+    })
+}
+
+fn ensure_global_codex_marketplace_manifest() -> Result<(), IntegrationError> {
+    let marketplace_root = codex_marketplace_root()?;
+    let path = codex_marketplace_manifest_path(&marketplace_root);
+    if path.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|source| IntegrationError::CreateDirectory {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    atomic_write(
+        &path,
+        serde_json::to_string_pretty(&codex_marketplace_manifest())?.as_bytes(),
+    )
+}
+
+fn register_codex_marketplace(marketplace_root: &Path) -> Result<(), IntegrationError> {
+    let marketplace_root = marketplace_root
+        .canonicalize()
+        .map_err(|source| IntegrationError::Canonicalize {
+            path: marketplace_root.to_path_buf(),
+            source,
+        })?;
+    let root_text = marketplace_root.to_string_lossy();
+    let marketplace_list = run_external(
+        "codex",
+        &["plugin", "marketplace", "list"],
+        &marketplace_root,
+        false,
+    )?;
+    if !String::from_utf8_lossy(&marketplace_list.stdout).contains(root_text.as_ref()) {
+        run_external(
+            "codex",
+            &[
+                "plugin",
+                "marketplace",
+                "add",
+                root_text.as_ref(),
+            ],
+            &marketplace_root,
+            false,
+        )?;
+    }
+    Ok(())
 }
 
 fn validate_manifest(root: &Path, relative: &str) -> Result<(), IntegrationError> {
@@ -1406,18 +1503,33 @@ mod tests {
     }
 
     #[test]
+    fn codex_marketplace_manifest_uses_global_plugin_path() {
+        let manifest = super::codex_marketplace_manifest();
+        assert_eq!(
+            manifest.get("name").and_then(serde_json::Value::as_str),
+            Some("punchcard")
+        );
+        assert_eq!(
+            manifest
+                .pointer("/plugins/0/source/path")
+                .and_then(serde_json::Value::as_str),
+            Some("./punchcard")
+        );
+    }
+
+    #[test]
     fn codex_plugin_toggle_changes_only_owned_enabled_key() {
-        let existing = "model = \"gpt-5\"\n\n[plugins.\"punchcard@personal\"]\nenabled = true\n\n[plugins.\"other@test\"]\nenabled = true\n";
+        let existing = "model = \"gpt-5\"\n\n[plugins.\"punchcard@punchcard\"]\nenabled = true\n\n[plugins.\"other@test\"]\nenabled = true\n";
 
         let updated = set_toml_table_bool(
             existing,
-            "[plugins.\"punchcard@personal\"]",
+            "[plugins.\"punchcard@punchcard\"]",
             "enabled",
             false,
         )
         .expect("installed plugin table should be found");
 
-        assert!(updated.contains("[plugins.\"punchcard@personal\"]\nenabled = false"));
+        assert!(updated.contains("[plugins.\"punchcard@punchcard\"]\nenabled = false"));
         assert!(updated.contains("[plugins.\"other@test\"]\nenabled = true"));
         assert!(updated.contains("model = \"gpt-5\""));
     }

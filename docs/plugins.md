@@ -48,8 +48,7 @@ punchcard doctor
 ```
 
 The Cursor plugin is linked from `plugins/cursor`. The Codex plugin is
-installed as `punchcard@personal` from `plugins/punchcard` through the
-repository-local marketplace.
+installed globally as `punchcard@punchcard` from `plugins/punchcard`.
 
 Lifecycle commands are idempotent:
 

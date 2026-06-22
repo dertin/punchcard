@@ -8,15 +8,17 @@ The skills, hooks, manifest, and generated `punchcard.md` instructions are rende
 `crates/punchcard-rules/assets`. Do not edit generated copies directly; run
 `./scripts/agent-assets.sh sync` after changing the canonical source.
 
-The repository marketplace is `.agents/plugins/marketplace.json`.
+Installation is global, like Cursor: the bundle is copied to
+`~/.codex/plugins/punchcard/punchcard` and registered once as `punchcard@punchcard`
+in `~/.codex/config.toml`. No per-repository `.agents/` files are required.
 
 ```bash
 punchcard plugin install codex --local-source ./plugins
 punchcard plugin status
 ```
 
-The installer registers the repository marketplace and installs
-`punchcard@personal`. It does not modify a repository's `AGENTS.md`.
+Run `install` from any initialized repository; it does not modify that
+repository's `AGENTS.md`.
 
 Restart Codex after changing plugin or project MCP configuration. The server
 instructions place the complete workflow guidance inside the first 512
