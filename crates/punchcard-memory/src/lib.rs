@@ -213,12 +213,14 @@ pub fn prepare_promotion<S: std::hash::BuildHasher>(
         .map(|validation| (validation.name.as_str(), validation))
         .collect();
 
+    let mut missing = Vec::new();
     let mut validated_tree: Option<&str> = None;
     let mut approved_evidence_refs = Vec::with_capacity(intent.required_validations.len());
     for name in &intent.required_validations {
-        let evidence = evidence_by_name
-            .get(name.as_str())
-            .ok_or_else(|| TransitionError::MissingValidation(name.clone()))?;
+        let Some(evidence) = evidence_by_name.get(name.as_str()) else {
+            missing.push(name.clone());
+            continue;
+        };
         if evidence.status != ValidationStatus::Passed {
             return Err(TransitionError::ValidationNotPassed {
                 name: name.clone(),
@@ -236,6 +238,9 @@ pub fn prepare_promotion<S: std::hash::BuildHasher>(
             validated_tree = Some(&evidence.working_tree_hash);
         }
         approved_evidence_refs.push(evidence.id.clone());
+    }
+    if !missing.is_empty() {
+        return Err(TransitionError::MissingValidations(missing.join(", ")));
     }
 
     if let Some(previous_id) = intent.supersedes.as_ref() {
@@ -368,10 +373,14 @@ pub enum TransitionError {
     #[error("change has no required validations; configure validation before promotion")]
     NoRequiredValidations,
     /// Required evidence was not recorded.
-    #[error("required validation `{0}` has not been recorded")]
-    MissingValidation(String),
+    #[error(
+        "required validations not recorded for this change: {0}. Record each with MCP `validation_run` (matching `name`) or `punchcard validate <name> --change-id <id>`. Direct cargo or shell commands do not attach governed evidence"
+    )]
+    MissingValidations(String),
     /// Required evidence did not pass.
-    #[error("required validation `{name}` is {status:?}, expected passed")]
+    #[error(
+        "required validation `{name}` is {status:?}, expected passed; rerun MCP `validation_run` with name `{name}` or `punchcard validate {name} --change-id <id>` on the same tree after fixing failures"
+    )]
     ValidationNotPassed {
         /// Validation name.
         name: String,
@@ -560,7 +569,27 @@ mod tests {
         let error = prepare_promotion(&intent, &[], &HashMap::new(), Vec::new())
             .expect_err("promotion without evidence must fail");
 
-        assert_eq!(error, TransitionError::MissingValidation("test".to_owned()));
+        assert_eq!(
+            error,
+            TransitionError::MissingValidations("test".to_owned())
+        );
+    }
+
+    #[test]
+    fn promotion_lists_every_missing_required_validation() {
+        let intent = intent(vec![
+            "fmt".to_owned(),
+            "check".to_owned(),
+            "test".to_owned(),
+        ]);
+
+        let error = prepare_promotion(&intent, &[], &HashMap::new(), Vec::new())
+            .expect_err("promotion without evidence must fail");
+
+        assert_eq!(
+            error,
+            TransitionError::MissingValidations("fmt, check, test".to_owned())
+        );
     }
 
     #[test]

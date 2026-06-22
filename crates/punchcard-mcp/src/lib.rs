@@ -862,6 +862,9 @@ impl PunchcardServer {
     }
 
     /// Execute one project-allowlisted validation command and attach its evidence to the named change.
+    ///
+    /// Call once per required name from `.punchcard/config.toml` before `change_promote`.
+    /// Running `cargo fmt`, `cargo test`, or similar shells directly does not record evidence.
     #[tool(
         name = "validation_run",
         annotations(
@@ -1055,6 +1058,9 @@ impl PunchcardServer {
     }
 
     /// Activate the named validated change as current governed memory, associate the listed files, and supersede its prior active card when configured.
+    ///
+    /// Requires every required validation to be recorded on this change via `validation_run`
+    /// (or `punchcard validate`) on the same working tree. Direct cargo commands do not count.
     #[tool(
         name = "change_promote",
         annotations(

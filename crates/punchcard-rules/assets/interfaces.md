@@ -8,7 +8,7 @@ When the Punchcard MCP server is available, prefer these tools over duplicate CL
 - `memory_projects` — list every project registered in the shared database with its repository root
 - `memory_forget` — preview and invalidate active/stale cards (`dry_run` defaults to true); requires `card_title` when forgetting by id
 - `memory_review` — confirm, mark stale, or invalidate one card (requires `card_title`)
-- `change_begin`, `change_fail`, `change_promote` — governed implementation history
+- `change_begin`, `validation_run`, `change_fail`, `change_promote` — governed implementation history
 - `session_start`, `session_end`, `session_context` — ephemeral working session per codebase
 - `task_open`, `task_close`, `task_note_save`, `task_note_search`, `task_summary` — task-scoped working notes; subagents read a parent task with `include_ancestors`; use `format=text` on `task_summary` for compact replay
 

@@ -5,8 +5,8 @@ description: Record validated changes and recall prior decisions, constraints, a
 
 # Punchcard governed memory
 
-Only **`active`** cards are current knowledge: `change_begin` → allowlisted
-validation on the same tree → `change_promote`. `change_fail` keeps failures
+Only **`active`** cards are current knowledge: `change_begin` → `validation_run` for each
+required name on the same tree → `change_promote`. `change_fail` keeps failures
 searchable; never active.
 
 ## Retrieve
