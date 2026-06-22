@@ -7,5 +7,6 @@ cd "$repository_root"
 cargo install --path crates/punchcard-cli --locked --force
 punchcard version
 punchcard agent-assets sync
+punchcard plugin install cursor --local-source ./plugins
 
 echo "Installed Punchcard. Run: punchcard init && punchcard rag index && punchcard doctor"

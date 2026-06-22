@@ -13,9 +13,14 @@ The rule, skills, commands, hooks, and manifest are generated from
 Do not edit those copies directly; run
 `punchcard agent-assets sync` after changing the canonical source.
 
-Local installation creates
-`~/.cursor/plugins/local/punchcard` as a symlink to the repository plugin.
-Existing content at that owned path is backed up before replacement.
+Local installation copies the repository plugin into
+`~/.cursor/plugins/local/punchcard`. Cursor 3.5+ rejects symlinked local
+plugins whose target lies outside that directory, so Punchcard installs a
+physical copy instead of linking back to the repository.
+
+Existing content at that owned path is backed up before replacement. After
+changing plugin assets, refresh the installed copy with
+`punchcard plugin upgrade cursor --local-source ./plugins`.
 
 ```bash
 punchcard plugin install cursor --local-source ./plugins

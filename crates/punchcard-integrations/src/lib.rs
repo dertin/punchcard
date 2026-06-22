@@ -333,6 +333,12 @@ fn install_cursor_plugin(
     source: &Path,
 ) -> Result<PluginStatus, IntegrationError> {
     validate_manifest(source, ".cursor-plugin/plugin.json")?;
+    let source = source
+        .canonicalize()
+        .map_err(|source_error| IntegrationError::Canonicalize {
+            path: source.to_path_buf(),
+            source: source_error,
+        })?;
     let destination = cursor_plugin_path()?;
     let disabled = cursor_disabled_plugin_path()?;
     if disabled.symlink_metadata().is_ok() {
@@ -340,11 +346,17 @@ fn install_cursor_plugin(
         remove_owned_path(&disabled)?;
     }
     if destination.symlink_metadata().is_ok() {
-        if destination
-            .canonicalize()
-            .ok()
-            .zip(source.canonicalize().ok())
-            .is_some_and(|(left, right)| left == right)
+        let metadata = destination
+            .symlink_metadata()
+            .map_err(|source| IntegrationError::Read {
+                path: destination.clone(),
+                source,
+            })?;
+        if metadata.file_type().is_symlink() {
+            backup_existing(project_root, &destination, "cursor-plugin-punchcard")?;
+            remove_owned_path(&destination)?;
+        } else if metadata.is_dir()
+            && plugin_tree_digest(&destination)? == plugin_tree_digest(&source)?
         {
             return Ok(PluginStatus {
                 agent: "cursor".to_owned(),
@@ -352,9 +364,10 @@ fn install_cursor_plugin(
                 enabled: true,
                 detail: destination.display().to_string(),
             });
+        } else {
+            backup_existing(project_root, &destination, "cursor-plugin-punchcard")?;
+            remove_owned_path(&destination)?;
         }
-        backup_existing(project_root, &destination, "cursor-plugin-punchcard")?;
-        remove_owned_path(&destination)?;
     }
     if let Some(parent) = destination.parent() {
         std::fs::create_dir_all(parent).map_err(|source| IntegrationError::CreateDirectory {
@@ -362,19 +375,7 @@ fn install_cursor_plugin(
             source,
         })?;
     }
-    std::os::unix::fs::symlink(
-        source
-            .canonicalize()
-            .map_err(|source_error| IntegrationError::Canonicalize {
-                path: source.to_path_buf(),
-                source: source_error,
-            })?,
-        &destination,
-    )
-    .map_err(|source| IntegrationError::Write {
-        path: destination.clone(),
-        source,
-    })?;
+    copy_plugin_tree(&source, &destination)?;
     Ok(PluginStatus {
         agent: "cursor".to_owned(),
         installed: true,
@@ -509,6 +510,22 @@ fn ensure_punchcard_on_path() -> Result<(), IntegrationError> {
     }
 }
 
+/// Returns whether the Cursor plugin is installed as a symlink.
+///
+/// Cursor 3.5+ rejects local plugins whose symlink target lies outside
+/// `~/.cursor/plugins/local`, so a copied directory is required.
+///
+/// # Errors
+///
+/// Returns [`IntegrationError`] when the home directory cannot be resolved.
+pub fn cursor_plugin_is_symlink() -> Result<bool, IntegrationError> {
+    let path = cursor_plugin_path()?;
+    Ok(path
+        .symlink_metadata()
+        .ok()
+        .is_some_and(|metadata| metadata.file_type().is_symlink()))
+}
+
 fn cursor_plugin_path() -> Result<PathBuf, IntegrationError> {
     let base = directories::BaseDirs::new().ok_or(IntegrationError::HomeDirectoryUnavailable)?;
     Ok(base.home_dir().join(".cursor/plugins/local/punchcard"))
@@ -587,6 +604,108 @@ fn bounded_output(output: &Output) -> String {
     format!("stdout: {stdout}\nstderr: {stderr}")
         .trim()
         .to_owned()
+}
+
+fn copy_plugin_tree(source: &Path, destination: &Path) -> Result<(), IntegrationError> {
+    let metadata = source
+        .symlink_metadata()
+        .map_err(|source_error| IntegrationError::Read {
+            path: source.to_path_buf(),
+            source: source_error,
+        })?;
+    if metadata.file_type().is_symlink() {
+        return Err(IntegrationError::ConfigurationConflict(
+            source.to_path_buf(),
+        ));
+    }
+    if metadata.is_dir() {
+        std::fs::create_dir_all(destination).map_err(|source_error| {
+            IntegrationError::CreateDirectory {
+                path: destination.to_path_buf(),
+                source: source_error,
+            }
+        })?;
+        let mut names = std::fs::read_dir(source)
+            .map_err(|source_error| IntegrationError::Read {
+                path: source.to_path_buf(),
+                source: source_error,
+            })?
+            .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+            .collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            copy_plugin_tree(&source.join(&name), &destination.join(&name))?;
+        }
+        return Ok(());
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|source_error| {
+            IntegrationError::CreateDirectory {
+                path: parent.to_path_buf(),
+                source: source_error,
+            }
+        })?;
+    }
+    std::fs::copy(source, destination).map_err(|source_error| IntegrationError::Write {
+        path: destination.to_path_buf(),
+        source: source_error,
+    })?;
+    Ok(())
+}
+
+fn plugin_tree_digest(root: &Path) -> Result<String, IntegrationError> {
+    let mut relative_paths = Vec::new();
+    collect_plugin_tree_files(root, root, &mut relative_paths)?;
+    relative_paths.sort();
+    let mut hasher = Sha256::new();
+    for relative in relative_paths {
+        hasher.update(relative.as_bytes());
+        hasher.update([0]);
+        let content =
+            std::fs::read(root.join(&relative)).map_err(|source| IntegrationError::Read {
+                path: root.join(&relative),
+                source,
+            })?;
+        hasher.update(content);
+        hasher.update([0]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn collect_plugin_tree_files(
+    base: &Path,
+    current: &Path,
+    relative_paths: &mut Vec<String>,
+) -> Result<(), IntegrationError> {
+    let mut names = std::fs::read_dir(current)
+        .map_err(|source| IntegrationError::Read {
+            path: current.to_path_buf(),
+            source,
+        })?
+        .filter_map(|entry| entry.ok().map(|entry| entry.file_name()))
+        .collect::<Vec<_>>();
+    names.sort();
+    for name in names {
+        let path = current.join(&name);
+        let metadata = path
+            .symlink_metadata()
+            .map_err(|source| IntegrationError::Read {
+                path: path.clone(),
+                source,
+            })?;
+        if metadata.file_type().is_symlink() {
+            return Err(IntegrationError::ConfigurationConflict(path));
+        }
+        let relative = path
+            .strip_prefix(base)
+            .map_err(|_| IntegrationError::ConfigurationConflict(path.clone()))?;
+        if metadata.is_dir() {
+            collect_plugin_tree_files(base, &path, relative_paths)?;
+        } else {
+            relative_paths.push(relative.to_string_lossy().into_owned());
+        }
+    }
+    Ok(())
 }
 
 fn backup_existing(project_root: &Path, path: &Path, label: &str) -> Result<(), IntegrationError> {
@@ -1086,9 +1205,32 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        find_git_root, init_project, init_project_with_model, load_config, run_validation,
-        set_rag_embedding_model, set_toml_table_bool, working_tree_hash,
+        find_git_root, init_project, init_project_with_model, load_config, plugin_tree_digest,
+        run_validation, set_rag_embedding_model, set_toml_table_bool, working_tree_hash,
     };
+
+    #[test]
+    fn plugin_tree_digest_changes_when_plugin_content_changes() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        let plugin_root = temporary.path().join("plugin");
+        fs::create_dir_all(plugin_root.join(".cursor-plugin"))
+            .expect("plugin manifest directory should be created");
+        fs::write(
+            plugin_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"punchcard","version":"0.1.0"}"#,
+        )
+        .expect("plugin manifest should be written");
+
+        let first = plugin_tree_digest(&plugin_root).expect("first digest should compute");
+        fs::write(
+            plugin_root.join(".cursor-plugin/plugin.json"),
+            r#"{"name":"punchcard","version":"0.1.1"}"#,
+        )
+        .expect("plugin manifest should be updated");
+        let second = plugin_tree_digest(&plugin_root).expect("second digest should compute");
+
+        assert_ne!(first, second);
+    }
 
     #[test]
     fn init_is_idempotent_and_preserves_existing_config() {

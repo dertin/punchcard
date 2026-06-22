@@ -16,7 +16,7 @@ use punchcard_core::{
 use punchcard_integrations::{
     Agent,
     config_lint::lint_project_config,
-    find_git_root, init_project_with_model, install_plugin, load_config,
+    cursor_plugin_is_symlink, find_git_root, init_project_with_model, install_plugin, load_config,
     logging::{persist_deck_log, prepare_tracing_log, prune_runtime_logs, runtime_log_storage},
     plugin_status, resolve_state_db_path, run_validation, set_plugin_enabled,
     set_rag_embedding_model, uninstall_plugin, upgrade_plugin,
@@ -1236,17 +1236,33 @@ fn command_doctor(cli: &Cli) -> Result<()> {
 
     for agent in [Agent::Cursor, Agent::Codex] {
         match plugin_status(agent, &context.root) {
-            Ok(status) => checks.push(DoctorCheck {
-                name: format!("{}_plugin", status.agent),
-                status: if status.installed && status.enabled {
-                    "ok"
-                } else {
-                    "warning"
-                },
-                detail: status.detail,
-                remediation: (!status.installed)
-                    .then(|| format!("Run `punchcard plugin install {}`.", status.agent)),
-            }),
+            Ok(status) => {
+                checks.push(DoctorCheck {
+                    name: format!("{}_plugin", status.agent),
+                    status: if status.installed && status.enabled {
+                        "ok"
+                    } else {
+                        "warning"
+                    },
+                    detail: status.detail,
+                    remediation: (!status.installed)
+                        .then(|| format!("Run `punchcard plugin install {}`.", status.agent)),
+                });
+                if agent == Agent::Cursor
+                    && status.installed
+                    && cursor_plugin_is_symlink().unwrap_or(false)
+                {
+                    checks.push(DoctorCheck {
+                        name: "cursor_plugin_layout".to_owned(),
+                        status: "warning",
+                        detail: "Cursor plugin is installed as a symlink; Cursor 3.5+ rejects symlink targets outside ~/.cursor/plugins/local".to_owned(),
+                        remediation: Some(
+                            "Run `punchcard plugin upgrade cursor --local-source ./plugins`."
+                                .to_owned(),
+                        ),
+                    });
+                }
+            }
             Err(error) => checks.push(DoctorCheck {
                 name: format!("{agent:?}_plugin").to_ascii_lowercase(),
                 status: "warning",

@@ -32,3 +32,6 @@
   validation evidence, and made checksum-verified model downloads mandatory.
 - Kept CodeGraph as an independent optional integration validated through its
   public CLI/MCP contract.
+- Cursor local plugin install now copies plugin files into
+  `~/.cursor/plugins/local/punchcard` instead of symlinking to the repository,
+  matching Cursor 3.5+ local-plugin security rules.
