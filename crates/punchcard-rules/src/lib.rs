@@ -22,6 +22,7 @@ const CURSOR_MCP: &str = include_str!("../assets/cursor-mcp.json");
 const CODEX_MCP: &str = include_str!("../assets/codex-mcp.json");
 const HOOKS: &str = include_str!("../assets/hooks.json");
 const CURSOR_DOCTOR_COMMAND: &str = include_str!("../assets/punchcard-doctor.md");
+const CURSOR_SETUP_COMMAND: &str = include_str!("../assets/punchcard-setup.md");
 const CURSOR_SYNC_COMMAND: &str = include_str!("../assets/punchcard-sync.md");
 const CONTEXT_SKILL: &str = include_str!("../assets/punchcard-context.md");
 const MEMORY_SKILL: &str = include_str!("../assets/punchcard-memory.md");
@@ -84,6 +85,12 @@ pub fn render_cursor_doctor_command() -> String {
     CURSOR_DOCTOR_COMMAND.to_owned()
 }
 
+/// Renders the Cursor bootstrap setup command doc.
+#[must_use]
+pub fn render_cursor_setup_command() -> String {
+    CURSOR_SETUP_COMMAND.to_owned()
+}
+
 /// Renders the Cursor sync command doc.
 #[must_use]
 pub fn render_cursor_sync_command() -> String {
@@ -100,16 +107,6 @@ pub fn render_context_skill() -> String {
 #[must_use]
 pub fn render_memory_skill() -> String {
     MEMORY_SKILL.to_owned()
-}
-
-/// Renders the workflow skill used by Cursor and Codex plugin bundles.
-#[must_use]
-pub fn render_workflow_skill() -> String {
-    format!(
-        "---\nname: punchcard-workflow\ndescription: Set up Punchcard and route MCP retrieval and governed memory.\n---\n\n# Punchcard workflow\n\n{}\n\n{}",
-        ACTIVATION.trim(),
-        WORKFLOW.trim()
-    )
 }
 
 /// Returns generated plugin bundles and end-user instruction artifacts.
@@ -131,6 +128,10 @@ pub fn render_delivery_assets() -> Vec<AgentAsset> {
         AgentAsset {
             path: "plugins/cursor/commands/punchcard-doctor.md",
             content: render_cursor_doctor_command(),
+        },
+        AgentAsset {
+            path: "plugins/cursor/commands/punchcard-setup.md",
+            content: render_cursor_setup_command(),
         },
         AgentAsset {
             path: "plugins/cursor/commands/punchcard-sync.md",
@@ -157,10 +158,6 @@ pub fn render_delivery_assets() -> Vec<AgentAsset> {
             content: render_memory_skill(),
         },
         AgentAsset {
-            path: "plugins/cursor/skills/punchcard-workflow/SKILL.md",
-            content: render_workflow_skill(),
-        },
-        AgentAsset {
             path: "plugins/punchcard/.codex-plugin/plugin.json",
             content: render_codex_plugin_manifest(),
         },
@@ -179,10 +176,6 @@ pub fn render_delivery_assets() -> Vec<AgentAsset> {
         AgentAsset {
             path: "plugins/punchcard/skills/punchcard-memory/SKILL.md",
             content: render_memory_skill(),
-        },
-        AgentAsset {
-            path: "plugins/punchcard/skills/punchcard-workflow/SKILL.md",
-            content: render_workflow_skill(),
         },
     ]
 }
@@ -218,7 +211,6 @@ mod tests {
     use super::{
         render_agent_assets, render_context_skill, render_cursor_rule, render_delivery_assets,
         render_mcp_instructions, render_memory_skill, render_punchcard_instructions,
-        render_workflow_skill,
     };
 
     #[test]
@@ -301,7 +293,16 @@ mod tests {
     fn skill_renderers_remain_bounded() {
         assert!(render_context_skill().len() < 1_500);
         assert!(render_memory_skill().len() < 2_100);
-        assert!(render_workflow_skill().len() < 1_500);
+    }
+
+    #[test]
+    fn plugin_bundles_exclude_workflow_skill() {
+        let paths = render_delivery_assets()
+            .into_iter()
+            .map(|asset| asset.path.to_owned())
+            .collect::<Vec<_>>();
+        assert!(!paths.iter().any(|path| path.contains("punchcard-workflow")));
+        assert!(paths.iter().any(|path| path.contains("punchcard-setup")));
     }
 
     #[test]
@@ -338,11 +339,10 @@ mod tests {
         let cursor = render_cursor_rule();
         let context = render_context_skill();
         let memory = render_memory_skill();
-        let workflow = render_workflow_skill();
 
         assert!(instructions.contains("Enriched"));
         assert!(instructions.contains("context_prepare"));
-        assert!(workflow.contains("before") && workflow.contains("Read/Grep"));
+        assert!(cursor.contains("before") && cursor.contains("Read/Grep"));
         assert!(cursor.contains("Enriched"));
         assert!(context.contains("Tier gate"));
         assert!(memory.contains("before mass Read/Grep"));

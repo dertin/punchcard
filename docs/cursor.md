@@ -6,7 +6,7 @@ The Cursor plugin lives in `plugins/cursor` and contains:
 - `mcp.json`;
 - the canonical Punchcard rule;
 - context and memory skills;
-- doctor and sync commands.
+- doctor, setup, and sync commands.
 
 The rule, skills, commands, hooks, and manifest are generated from
 `crates/punchcard-rules/assets` and mirrored into the plugin bundle for Cursor.
