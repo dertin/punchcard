@@ -6,11 +6,13 @@ use std::time::Instant;
 use chrono::Utc;
 use punchcard_core::{
     Actor, Card, CardId, CardKind, CardStatus, ChangeId, ChangeIntent, Deck, DeckId, DeckItem,
-    DocumentChunk, FileFingerprint, MemoryKind, MemoryRecallHit, MemoryReviewAction,
-    MemorySearchHit, ObservationKind, ProjectConfig, ProjectId, ProjectRecord, RagSearchHit,
-    Session, SessionId, Task, TaskId, TaskObservation, ValidationEvidence,
+    DocumentChunk, MemoryKind, MemoryRecallHit, MemoryReviewAction, MemorySearchHit,
+    ObservationKind, ProjectConfig, ProjectId, ProjectRecord, RagSearchHit, Session, SessionId,
+    Task, TaskId, TaskObservation, ValidationEvidence,
 };
-use punchcard_integrations::{find_git_root, load_config, resolve_state_db_path, run_validation};
+use punchcard_integrations::{
+    find_git_root, fingerprint_project_files, load_config, resolve_state_db_path, run_validation,
+};
 use punchcard_memory::{
     WorkspacePointerInput, memory_recall_hit, memory_search_hit_for_card, prepare_promotion,
     workspace_pointers,
@@ -23,7 +25,6 @@ use rmcp::{
     schemars, tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 /// Server-wide workflow guidance.
@@ -152,11 +153,12 @@ fn wants_full_detail(detail: Option<&str>) -> bool {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ContextPrepareInput {
     /// Concrete programming task.
+    #[serde(alias = "query")]
     task: String,
     /// Explicit approximate token budget.
     budget: Option<usize>,
     /// Optional paths or symbols already known by the caller.
-    #[serde(default)]
+    #[serde(default, alias = "paths")]
     hints: Vec<String>,
     /// Optional session to bias the deck toward recent working observations.
     session_id: Option<String>,
@@ -199,6 +201,26 @@ struct ChangePromoteInput {
     /// Repository-relative files associated with the validated behavior.
     #[serde(default)]
     files: Vec<PathBuf>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct ChangeBeginOutput {
+    /// Registered project name from configuration.
+    project_name: String,
+    /// Git repository root used by this MCP server.
+    project_root: PathBuf,
+    #[serde(flatten)]
+    change: ChangeIntent,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct ValidationRunOutput {
+    /// Registered project name from configuration.
+    project_name: String,
+    /// Git repository root where the validation command ran.
+    project_root: PathBuf,
+    #[serde(flatten)]
+    evidence: ValidationEvidence,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -444,6 +466,9 @@ fn verify_approval_title(kind: &str, stored: &str, supplied: &str) -> Result<(),
 #[tool_router]
 impl PunchcardServer {
     /// Read project memory and documentation to prepare a bounded evidence deck. This does not modify repository or memory state.
+    ///
+    /// Example: `{"task": "add retry to Atenea client", "hints": ["src/atenea/"]}`.
+    /// Use `task` and optional `hints` (search tools use `query`).
     #[tool(
         name = "context_prepare",
         annotations(
@@ -869,7 +894,7 @@ impl PunchcardServer {
     async fn change_begin(
         &self,
         Parameters(input): Parameters<ChangeBeginInput>,
-    ) -> Result<Json<ChangeIntent>, String> {
+    ) -> Result<Json<ChangeBeginOutput>, String> {
         let started = Instant::now();
         let project = self.project()?;
         let intent = ChangeIntent {
@@ -893,7 +918,11 @@ impl PunchcardServer {
             .create_change(&intent, Actor::Codex)
             .map_err(|error| error.to_string())?;
         record_tool(&project, "change_begin", started, 1, 0);
-        Ok(Json(intent))
+        Ok(Json(ChangeBeginOutput {
+            project_name: project.config.project.name.clone(),
+            project_root: self.root.clone(),
+            change: intent,
+        }))
     }
 
     /// Execute one project-allowlisted validation command and attach its evidence to the named change.
@@ -913,7 +942,7 @@ impl PunchcardServer {
     async fn validation_run(
         &self,
         Parameters(input): Parameters<ValidationRunInput>,
-    ) -> Result<Json<ValidationEvidence>, String> {
+    ) -> Result<Json<ValidationRunOutput>, String> {
         let started = Instant::now();
         let project = self.project()?;
         let change_id = ChangeId::parse(input.change_id).map_err(|error| error.to_string())?;
@@ -937,7 +966,11 @@ impl PunchcardServer {
             .map_err(|error| error.to_string())?;
         let bytes = serde_json::to_vec(&evidence).map_or(0, |value| value.len());
         record_tool(&project, "validation_run", started, 1, bytes);
-        Ok(Json(evidence))
+        Ok(Json(ValidationRunOutput {
+            project_name: project.config.project.name.clone(),
+            project_root: self.root.clone(),
+            evidence,
+        }))
     }
 
     /// Append a failed or interrupted result to the named change while preserving current active memory.
@@ -1096,6 +1129,10 @@ impl PunchcardServer {
     ///
     /// Requires every required validation to be recorded on this change via `validation_run`
     /// (or `punchcard validate`) on the same working tree. Direct cargo commands do not count.
+    ///
+    /// Example without files: `{"change_id": "...", "change_title": "..."}`.
+    /// Optional `files` must exist on disk, repo-relative to `project_root` from `change_begin`
+    /// or `validation_run`; omit when unsure.
     #[tool(
         name = "change_promote",
         annotations(
@@ -1126,7 +1163,8 @@ impl PunchcardServer {
             .store
             .active_cards_for_change(&intent)
             .map_err(|error| error.to_string())?;
-        let files = fingerprint_files(&self.root, &input.files)?;
+        let files = fingerprint_project_files(&self.root, &input.files)
+            .map_err(|error| error.to_string())?;
         let card = prepare_promotion(&intent, &validations, &active_cards, files)
             .map_err(|error| error.to_string())?;
         project
@@ -1592,41 +1630,6 @@ fn estimate_tokens(content: &str) -> usize {
     content.chars().count().div_ceil(4)
 }
 
-fn fingerprint_files(root: &Path, files: &[PathBuf]) -> Result<Vec<FileFingerprint>, String> {
-    files
-        .iter()
-        .map(|path| {
-            let absolute = if path.is_absolute() {
-                path.clone()
-            } else {
-                root.join(path)
-            };
-            let canonical = absolute.canonicalize().map_err(|error| {
-                format!(
-                    "failed to resolve associated file {}: {error}",
-                    path.display()
-                )
-            })?;
-            if !canonical.starts_with(root) {
-                return Err(format!(
-                    "associated file is outside the project: {}",
-                    path.display()
-                ));
-            }
-            let content = std::fs::read(&canonical).map_err(|error| {
-                format!("failed to read associated file {}: {error}", path.display())
-            })?;
-            Ok(FileFingerprint {
-                path: canonical
-                    .strip_prefix(root)
-                    .unwrap_or(&canonical)
-                    .to_path_buf(),
-                content_hash: hex::encode(Sha256::digest(content)),
-            })
-        })
-        .collect()
-}
-
 fn parse_card_kind(value: &str) -> Result<CardKind, String> {
     match value {
         "decision" => Ok(CardKind::Decision),
@@ -1737,6 +1740,16 @@ mod tests {
             prefix.contains("only after all required validations pass"),
             "critical promotion rule must fit in the first 512 characters"
         );
+    }
+
+    #[test]
+    fn context_prepare_input_accepts_legacy_parameter_names() {
+        let parsed: super::ContextPrepareInput = serde_json::from_str(
+            r#"{"query":"fix atenea integration tests","paths":["tests/","src/atenea/"]}"#,
+        )
+        .expect("legacy aliases should deserialize");
+        assert_eq!(parsed.task, "fix atenea integration tests");
+        assert_eq!(parsed.hints, ["tests/", "src/atenea/"]);
     }
 
     #[tokio::test]

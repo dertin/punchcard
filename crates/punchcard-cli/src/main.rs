@@ -9,15 +9,14 @@ use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use punchcard_core::{
-    Actor, CardId, CardKind, CardStatus, ChangeId, ChangeIntent, Deck, DeckId, DeckItem,
-    FileFingerprint, LogLevel, MemoryEventRecord, MemoryKind, MemoryReviewAction, ProjectConfig,
-    ProjectId,
+    Actor, CardId, CardKind, CardStatus, ChangeId, ChangeIntent, Deck, DeckId, DeckItem, LogLevel,
+    MemoryEventRecord, MemoryKind, MemoryReviewAction, ProjectConfig, ProjectId,
 };
 use punchcard_integrations::{
     Agent,
     config_lint::lint_project_config,
-    cursor_plugin_is_symlink, executable_on_path, find_git_root, init_project_with_model,
-    install_plugin, is_punchcard_development_repo, load_config,
+    cursor_plugin_is_symlink, executable_on_path, find_git_root, fingerprint_project_files,
+    init_project_with_model, install_plugin, is_punchcard_development_repo, load_config,
     logging::{persist_deck_log, prepare_tracing_log, prune_runtime_logs, runtime_log_storage},
     plugin_status, resolve_state_db_path, run_validation, set_plugin_enabled,
     set_rag_embedding_model, uninstall_plugin, upgrade_plugin,
@@ -31,7 +30,6 @@ use punchcard_security::{
 };
 use punchcard_store::{GovernedForgetRequest, Store};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -857,7 +855,7 @@ fn command_change(cli: &Cli, command: ChangeCommand) -> Result<()> {
             let intent = context.store.get_change(&change_id)?;
             let validations = context.store.validations_for_change(&change_id)?;
             let active_cards = context.store.active_cards_for_change(&intent)?;
-            let files = fingerprint_files(&context.root, &arguments.files)?;
+            let files = fingerprint_project_files(&context.root, &arguments.files)?;
             let card = prepare_promotion(&intent, &validations, &active_cards, files)?;
             context.store.promote_card(&change_id, &card, Actor::Cli)?;
             print_serializable(cli.json, &card)?;
@@ -1695,34 +1693,6 @@ fn project_start(cli: &Cli) -> Result<PathBuf> {
     cli.project_root
         .clone()
         .map_or_else(|| std::env::current_dir().map_err(Into::into), Ok)
-}
-
-fn fingerprint_files(root: &Path, files: &[PathBuf]) -> Result<Vec<FileFingerprint>> {
-    files
-        .iter()
-        .map(|path| {
-            let absolute = if path.is_absolute() {
-                path.clone()
-            } else {
-                root.join(path)
-            };
-            let canonical = absolute
-                .canonicalize()
-                .with_context(|| format!("failed to resolve {}", absolute.display()))?;
-            if !canonical.starts_with(root) {
-                bail!("associated file is outside the project: {}", path.display());
-            }
-            let content = std::fs::read(&canonical)
-                .with_context(|| format!("failed to read {}", canonical.display()))?;
-            Ok(FileFingerprint {
-                path: canonical
-                    .strip_prefix(root)
-                    .unwrap_or(&canonical)
-                    .to_path_buf(),
-                content_hash: hex::encode(Sha256::digest(content)),
-            })
-        })
-        .collect()
 }
 
 fn estimate_tokens(content: &str) -> usize {

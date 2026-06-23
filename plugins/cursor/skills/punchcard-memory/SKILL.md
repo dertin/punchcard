@@ -9,20 +9,18 @@ Only **`active`** cards are current knowledge: `change_begin` → `validation_ru
 required name on the same tree → `change_promote`. `change_fail` keeps failures
 searchable; never active.
 
-## Retrieve
+## Retrieve (before coding on Enriched work)
 
-Discover/Implement: `context_prepare` once. `memory_search`/`memory_get` return compact
-hits; read `summary` first. Use `memory_get` + `detail=full` only for evidence refs and
-file hashes. Fan out on deck gaps, recall, overlap, or retries with `include_archive`.
+Run Discover before mass Read/Grep when tier is **Enriched** or active cards may apply.
+`context_prepare({ task, hints? })` once; `memory_search` / `memory_get` only for deck
+gaps. Read `summary` first; `memory_get` + `detail=full` only for evidence refs.
+Fan out with `include_archive` on retries or overlap checks.
 
 ## Workspace (shared `state_db`)
 
-With a shared `state_db`, `memory_search(include_workspace: true)` searches every
-project; sibling hits include `project_name` and `project_root`.
-`context_prepare` may add a small `workspace` section pointing at sibling repos
-with task-relevant memory or referenced in docs — **leads, not facts**: fan out
-with `memory_search --workspace` only on a real gap. Promote only in the repo you
-are editing.
+`memory_search(include_workspace: true)` searches every project; sibling hits include
+`project_name` and `project_root`. `context_prepare` may add a small `workspace`
+section — **leads, not facts**. Promote only in the repo you are editing.
 
 ## Forget (codebase)
 
@@ -30,14 +28,14 @@ are editing.
 
 ## Store (Implement)
 
-`change_promote` only with validated `files`; promote code, decisions, and
-constraints — not unvalidated guesses.
+Confirm `project_root` from `change_begin` / `validation_run` matches the edited repo.
+`change_promote` `files` are optional; paths must exist under `project_root`.
+`change_begin` **Evidence** must cite deck items or memory consulted when Discover ran.
 
 ## Working memory (session/task)
 
 `task_note_save` / `task_note_search` (`include_ancestors: true`) hold ephemeral
-observations, incl. a parent's notes for subagents. Never trusted — promote via
-`change_begin`.
+observations. Never trusted — promote via `change_begin`.
 
 ## Card shape
 

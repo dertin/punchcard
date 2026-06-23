@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use punchcard_core::{
-    Actor, ChangeId, CommandEvidence, DEFAULT_RAG_EMBEDDING_MODEL, ProjectConfig,
+    Actor, ChangeId, CommandEvidence, DEFAULT_RAG_EMBEDDING_MODEL, FileFingerprint, ProjectConfig,
     ValidationEvidence, ValidationId, ValidationStatus,
 };
 use punchcard_security::{
@@ -64,12 +64,18 @@ pub fn is_punchcard_development_repo(root: &Path) -> bool {
         && root.join("crates/punchcard-cli/Cargo.toml").is_file()
 }
 
+/// Returns true when `path` is the root of a Git work tree.
+#[must_use]
+pub fn is_git_work_tree(path: &Path) -> bool {
+    path.join(".git").join("HEAD").is_file()
+}
+
 /// Finds the nearest Git repository root.
 ///
 /// # Errors
 ///
-/// Returns [`IntegrationError::GitRootNotFound`] if no ancestor contains
-/// `.git`.
+/// Returns [`IntegrationError::GitRootNotFound`] if no ancestor contains a
+/// `.git/HEAD` work tree marker.
 pub fn find_git_root(start: &Path) -> Result<PathBuf, IntegrationError> {
     let start = start
         .canonicalize()
@@ -78,11 +84,65 @@ pub fn find_git_root(start: &Path) -> Result<PathBuf, IntegrationError> {
             source,
         })?;
     for candidate in start.ancestors() {
-        if candidate.join(".git").exists() {
+        if is_git_work_tree(candidate) {
             return Ok(candidate.to_path_buf());
         }
     }
     Err(IntegrationError::GitRootNotFound(start))
+}
+
+/// Fingerprints repository-relative files for governed promotion.
+///
+/// # Errors
+///
+/// Returns [`IntegrationError`] when a path cannot be resolved under
+/// `project_root` or falls outside the project boundary.
+pub fn fingerprint_project_files(
+    project_root: &Path,
+    files: &[PathBuf],
+) -> Result<Vec<FileFingerprint>, IntegrationError> {
+    let project_root =
+        project_root
+            .canonicalize()
+            .map_err(|source| IntegrationError::Canonicalize {
+                path: project_root.to_path_buf(),
+                source,
+            })?;
+    files
+        .iter()
+        .map(|path| {
+            let absolute = if path.is_absolute() {
+                path.clone()
+            } else {
+                project_root.join(path)
+            };
+            let canonical = absolute.canonicalize().map_err(|source| {
+                IntegrationError::AssociatedFileResolve {
+                    requested: path.clone(),
+                    project_root: project_root.clone(),
+                    resolved: absolute,
+                    source,
+                }
+            })?;
+            if !canonical.starts_with(&project_root) {
+                return Err(IntegrationError::AssociatedFileOutside {
+                    requested: path.clone(),
+                    project_root: project_root.clone(),
+                });
+            }
+            let content = std::fs::read(&canonical).map_err(|source| IntegrationError::Read {
+                path: canonical.clone(),
+                source,
+            })?;
+            Ok(FileFingerprint {
+                path: canonical
+                    .strip_prefix(&project_root)
+                    .unwrap_or(&canonical)
+                    .to_path_buf(),
+                content_hash: hex::encode(Sha256::digest(content)),
+            })
+        })
+        .collect()
 }
 
 /// Resolves the `SQLite` state database path for a project.
@@ -215,12 +275,7 @@ pub fn upgrade_plugin(
     if agent == Agent::Codex {
         let _ = run_external(
             "codex",
-            &[
-                "plugin",
-                "remove",
-                &codex_plugin_selector(),
-                "--json",
-            ],
+            &["plugin", "remove", &codex_plugin_selector(), "--json"],
             &codex_marketplace_root()?,
             true,
         )?;
@@ -650,12 +705,13 @@ fn ensure_global_codex_marketplace_manifest() -> Result<(), IntegrationError> {
 }
 
 fn register_codex_marketplace(marketplace_root: &Path) -> Result<(), IntegrationError> {
-    let marketplace_root = marketplace_root
-        .canonicalize()
-        .map_err(|source| IntegrationError::Canonicalize {
-            path: marketplace_root.to_path_buf(),
-            source,
-        })?;
+    let marketplace_root =
+        marketplace_root
+            .canonicalize()
+            .map_err(|source| IntegrationError::Canonicalize {
+                path: marketplace_root.to_path_buf(),
+                source,
+            })?;
     let root_text = marketplace_root.to_string_lossy();
     let marketplace_list = run_external(
         "codex",
@@ -666,12 +722,7 @@ fn register_codex_marketplace(marketplace_root: &Path) -> Result<(), Integration
     if !String::from_utf8_lossy(&marketplace_list.stdout).contains(root_text.as_ref()) {
         run_external(
             "codex",
-            &[
-                "plugin",
-                "marketplace",
-                "add",
-                root_text.as_ref(),
-            ],
+            &["plugin", "marketplace", "add", root_text.as_ref()],
             &marketplace_root,
             false,
         )?;
@@ -1245,6 +1296,33 @@ pub enum IntegrationError {
     /// No Git root was found.
     #[error("no Git repository root found from {0}")]
     GitRootNotFound(PathBuf),
+    /// An associated file could not be resolved under the project root.
+    #[error(
+        "failed to resolve associated file {requested}: {source} (project_root: {}, resolved: {})",
+        project_root.display(),
+        resolved.display()
+    )]
+    AssociatedFileResolve {
+        /// Repository-relative path supplied by the caller.
+        requested: PathBuf,
+        /// Git root used for resolution.
+        project_root: PathBuf,
+        /// Absolute path that was checked on disk.
+        resolved: PathBuf,
+        /// Underlying I/O error.
+        source: std::io::Error,
+    },
+    /// An associated file resolved outside the project root.
+    #[error(
+        "associated file is outside the project: {requested} (project_root: {})",
+        project_root.display()
+    )]
+    AssociatedFileOutside {
+        /// Repository-relative path supplied by the caller.
+        requested: PathBuf,
+        /// Git root used for resolution.
+        project_root: PathBuf,
+    },
     /// A directory could not be created.
     #[error("failed to create directory {path}: {source}")]
     CreateDirectory {
@@ -1339,16 +1417,27 @@ mod tests {
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::path::PathBuf;
     use std::process::Command;
 
     use punchcard_core::{Actor, ChangeId, ProjectConfig, ValidationCommand, ValidationLevel};
     use tempfile::tempdir;
 
     use super::{
-        find_git_root, init_project, init_project_with_model, is_punchcard_development_repo,
-        load_config, plugin_tree_digest, run_validation, set_rag_embedding_model,
-        set_toml_table_bool, working_tree_hash,
+        find_git_root, fingerprint_project_files, init_project, init_project_with_model,
+        is_punchcard_development_repo, load_config, plugin_tree_digest, run_validation,
+        set_rag_embedding_model, set_toml_table_bool, working_tree_hash,
     };
+
+    fn init_git_repo(path: &std::path::Path) {
+        let status = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(path)
+            .status()
+            .expect("git should start");
+        assert!(status.success(), "git init should succeed");
+    }
 
     #[test]
     fn development_repo_detection_requires_punchcard_crates() {
@@ -1400,7 +1489,7 @@ mod tests {
     #[test]
     fn init_is_idempotent_and_preserves_existing_config() {
         let temporary = tempdir().expect("temporary directory should exist");
-        fs::create_dir(temporary.path().join(".git")).expect("git marker should be created");
+        init_git_repo(temporary.path());
 
         let first = init_project(temporary.path()).expect("first init should succeed");
         let second = init_project(temporary.path()).expect("second init should succeed");
@@ -1411,7 +1500,7 @@ mod tests {
     #[test]
     fn init_persists_selected_model_without_overwriting_it() {
         let temporary = tempdir().expect("temporary directory should exist");
-        fs::create_dir(temporary.path().join(".git")).expect("git marker should be created");
+        init_git_repo(temporary.path());
 
         init_project_with_model(temporary.path(), "nomic-ai/CodeRankEmbed")
             .expect("selected model should initialize");
@@ -1434,7 +1523,7 @@ mod tests {
     fn init_rejects_symlinked_data_directory() {
         let temporary = tempdir().expect("temporary directory should exist");
         let outside = tempdir().expect("outside directory should exist");
-        fs::create_dir(temporary.path().join(".git")).expect("git marker should be created");
+        init_git_repo(temporary.path());
         symlink(outside.path(), temporary.path().join(".punchcard"))
             .expect("fixture symlink should be created");
 
@@ -1448,7 +1537,7 @@ mod tests {
     #[test]
     fn init_restricts_project_data_directory_permissions() {
         let temporary = tempdir().expect("temporary directory should exist");
-        fs::create_dir(temporary.path().join(".git")).expect("git marker should be created");
+        init_git_repo(temporary.path());
 
         init_project(temporary.path()).expect("project should initialize");
 
@@ -1463,7 +1552,13 @@ mod tests {
     #[test]
     fn git_root_is_found_from_nested_directory() {
         let temporary = tempdir().expect("temporary directory should exist");
-        fs::create_dir(temporary.path().join(".git")).expect("git marker should be created");
+        let status = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(temporary.path())
+            .status()
+            .expect("git should start");
+        assert!(status.success(), "git init should succeed");
         let nested = temporary.path().join("a/b");
         fs::create_dir_all(&nested).expect("nested directory should be created");
 
@@ -1475,6 +1570,58 @@ mod tests {
                 .path()
                 .canonicalize()
                 .expect("temporary path should canonicalize")
+        );
+    }
+
+    #[test]
+    fn find_git_root_skips_git_dir_without_head() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        let outer = temporary.path().join("outer");
+        let inner = outer.join("inner");
+        fs::create_dir_all(inner.join("src")).expect("nested tree should be created");
+        fs::create_dir(outer.join(".git")).expect("bogus git marker should be created");
+        let status = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&inner)
+            .status()
+            .expect("git should start");
+        assert!(status.success(), "git init should succeed");
+
+        let root = find_git_root(&inner.join("src")).expect("inner git root should resolve");
+
+        assert_eq!(
+            root,
+            inner
+                .canonicalize()
+                .expect("inner path should canonicalize")
+        );
+    }
+
+    #[test]
+    fn fingerprint_project_files_reports_project_root_on_missing_path() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        let status = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(temporary.path())
+            .status()
+            .expect("git should start");
+        assert!(status.success(), "git init should succeed");
+        let root = temporary
+            .path()
+            .canonicalize()
+            .expect("temporary path should canonicalize");
+        let error = fingerprint_project_files(&root, &[PathBuf::from("src/missing.rs")])
+            .expect_err("missing file should fail");
+        let message = error.to_string();
+        assert!(
+            message.contains("project_root:"),
+            "error should name project_root"
+        );
+        assert!(
+            message.contains("src/missing.rs"),
+            "error should name requested path"
         );
     }
 

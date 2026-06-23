@@ -1,21 +1,27 @@
-Classify each user request before tools. Pick the cheapest route that preserves correctness.
+Classify each user request before tools. Pick the **shallowest tier** that preserves correctness — not the fewest tool calls when evidence is missing.
 
-Routes describe **how much Punchcard to use**, not where code runs. None of these mean local machine vs remote environment.
+## Tiers (before Read/Grep)
 
-| Route | Meaning | Punchcard tools |
+| Tier | When | Punchcard start |
 |---|---|---|
-| **Source-only** | You already know which files or symbols answer the request; scope is closed | None — open and read source |
-| **Discover** | Scope, cause, requirements, or blast radius are still open | `context_prepare`, then `rag_get` / `memory_search` only for deck gaps |
-| **Implement** | Discover path plus a material code or doc change that must be recorded as validated project memory | Discover tools, then `change_begin` → `validation_run` for each required name → `change_promote` |
+| **Trivial** | Named file(s), mechanical edit, closed scope | None |
+| **Scoped** | Few files, clear logic, no active cards on topic | Optional `context_prepare` |
+| **Enriched** | Refactor, feature, integration, retrocompat, open blast radius, debug, plan | **`context_prepare` first** |
 
-| Request | Signals | Route |
+**Enriched signals** (any): refactor / feature / integrate / retrocompat / architecture; external contracts or flags; more than 3 modules or unknown blast radius; active cards on domain; analysis beyond a one-line swap.
+
+| Route | Meaning | Tools |
 |---|---|---|
-| Code or behavior question | Named symbol, file, or closed scope | Source-only if the files are already known; otherwise Discover |
-| Small scoped edit | Few files, clear edit target | Source-only if files are known; Implement if the result must be recorded |
-| Refactor or multi-file work | Cross-module scope or unclear blast radius | Discover, then Implement |
-| Plan or design | User asks for options, phases, or tradeoffs before code | Discover; concise plan only — do not implement until asked |
-| Debug or investigate | Symptom, regression, or unknown cause | Discover |
-| Review or audit | Explain, review, or compare existing code or docs | Source-only if targets are named; otherwise Discover |
-| Subagent delegation | Parent spawns focused workers | Parent classifies once; each subagent gets one bounded goal, route, and stop rules; parent synthesizes; no duplicate retrieval for the same gap |
+| **Source-only** | Trivial | Read source |
+| **Discover** | Scoped or Enriched | `context_prepare` once (required if Enriched); `rag_get` / `memory_search` only for deck gaps |
+| **Implement** | Material validated change | Discover when not Trivial → `change_begin` → `validation_run`* → `change_promote` |
 
-Decision rules: unsure source-only vs discover → discover; material change that must outlive the session → implement; plan only when the user asks or scope needs multiple decisions; open `change_begin` at implementation start; record every required name with `validation_run` before `change_promote`.
+| Request | Route |
+|---|---|
+| Closed question or trivial edit | Source-only if Trivial |
+| Refactor, multi-file, debug, plan | **Enriched** → Discover [→ Implement] |
+| Subagent work | Parent sets tier once; no duplicate retrieval |
+
+Rules: Enriched → `context_prepare` before mass Read/Grep; unsure Scoped vs Enriched → Enriched; Implement needs Discover unless Trivial; `change_begin` **Evidence** cites deck/memory when Discover ran; `validation_run` each required name before `change_promote`.
+
+Routes describe **how much Punchcard to use**, not where code runs.

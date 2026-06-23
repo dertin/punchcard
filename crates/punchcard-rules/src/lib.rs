@@ -326,10 +326,26 @@ mod tests {
     #[test]
     fn routing_maps_common_request_shapes() {
         let instructions = render_punchcard_instructions();
-        assert!(instructions.contains("Code or behavior question"));
-        assert!(instructions.contains("Debug or investigate"));
-        assert!(instructions.contains("Subagent delegation"));
+        assert!(instructions.contains("Refactor"));
+        assert!(instructions.contains("debug"));
+        assert!(instructions.contains("Subagent"));
         assert!(instructions.contains("Source-only"));
+    }
+
+    #[test]
+    fn routing_includes_enriched_tier_policy() {
+        let instructions = render_punchcard_instructions();
+        let cursor = render_cursor_rule();
+        let context = render_context_skill();
+        let memory = render_memory_skill();
+        let workflow = render_workflow_skill();
+
+        assert!(instructions.contains("Enriched"));
+        assert!(instructions.contains("context_prepare"));
+        assert!(workflow.contains("before") && workflow.contains("Read/Grep"));
+        assert!(cursor.contains("Enriched"));
+        assert!(context.contains("Tier gate"));
+        assert!(memory.contains("before mass Read/Grep"));
     }
 
     #[test]
