@@ -616,7 +616,32 @@ impl Store {
         include_archive: bool,
         limit: usize,
     ) -> Result<Vec<Card>, StoreError> {
-        let fts_query = safe_fts_query(query);
+        self.search_cards_with_query(project_id, query, include_archive, limit, safe_fts_query)
+    }
+
+    /// Searches active or stale cards for deck preparation using stricter term matching.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError`] when `SQLite` or decoding fails.
+    pub fn search_cards_for_deck(
+        &self,
+        project_id: &ProjectId,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<Card>, StoreError> {
+        self.search_cards_with_query(project_id, query, false, limit, deck_fts_query)
+    }
+
+    fn search_cards_with_query(
+        &self,
+        project_id: &ProjectId,
+        query: &str,
+        include_archive: bool,
+        limit: usize,
+        build_query: fn(&str) -> String,
+    ) -> Result<Vec<Card>, StoreError> {
+        let fts_query = build_query(query);
         if fts_query.is_empty() {
             return Ok(Vec::new());
         }
@@ -1524,6 +1549,71 @@ fn safe_fts_query(query: &str) -> String {
         .join(" OR ")
 }
 
+fn deck_fts_query(query: &str) -> String {
+    let mut terms = Vec::new();
+    for term in query.split(|character: char| !character.is_alphanumeric()) {
+        if term.is_empty() {
+            continue;
+        }
+        let normalized = term.to_ascii_lowercase();
+        if normalized.len() < 2 || is_fts_stop_word(&normalized) {
+            continue;
+        }
+        if !terms.contains(&normalized) {
+            terms.push(normalized);
+        }
+    }
+    if terms.is_empty() {
+        return String::new();
+    }
+    if terms.len() == 1 {
+        let escaped = terms[0].replace('"', "\"\"");
+        return format!("\"{escaped}\"");
+    }
+    terms
+        .iter()
+        .map(|term| {
+            let escaped = term.replace('"', "\"\"");
+            format!("\"{escaped}\"")
+        })
+        .collect::<Vec<_>>()
+        .join(" AND ")
+}
+
+fn is_fts_stop_word(term: &str) -> bool {
+    matches!(
+        term,
+        "a" | "an"
+            | "and"
+            | "another"
+            | "are"
+            | "as"
+            | "at"
+            | "be"
+            | "by"
+            | "do"
+            | "does"
+            | "for"
+            | "from"
+            | "in"
+            | "is"
+            | "it"
+            | "no"
+            | "not"
+            | "of"
+            | "on"
+            | "one"
+            | "or"
+            | "the"
+            | "this"
+            | "that"
+            | "to"
+            | "use"
+            | "using"
+            | "with"
+    )
+}
+
 fn truncate_chars(value: &str, maximum: usize) -> String {
     let mut chars = value.chars();
     let excerpt: String = chars.by_ref().take(maximum).collect();
@@ -1547,8 +1637,7 @@ mod tests {
     };
     use tempfile::tempdir;
 
-    use super::{Store, StoreError};
-
+    use super::{Store, StoreError, deck_fts_query, safe_fts_query};
     fn registered_store() -> (Store, ProjectId) {
         let store = Store::in_memory().expect("in-memory store should initialize");
         let project_id = ProjectId::from_persisted("p".to_owned());
@@ -1747,5 +1836,77 @@ mod tests {
             .expect("stale card should invalidate");
         assert_eq!(invalidated.status, CardStatus::Invalidated);
         assert!(invalidated.valid_until.is_some());
+    }
+
+    #[test]
+    fn deck_fts_query_requires_significant_terms() {
+        let broad = safe_fts_query("fix login bug");
+        assert!(broad.contains(" OR "));
+
+        let strict = deck_fts_query(
+            "Configure separate DB users: one for SQLx migrations and another for chatapi app operations",
+        );
+        assert!(strict.contains(" AND "));
+        assert!(strict.contains("sqlx"));
+        assert!(strict.contains("migrations"));
+        assert!(!strict.contains(" for "));
+    }
+
+    #[test]
+    fn search_cards_for_deck_is_stricter_than_broad_search() {
+        let (store, project_id) = registered_store();
+        let cards = [
+            Card {
+                id: CardId::from_persisted("crm-action".to_owned()),
+                project_id: project_id.clone(),
+                kind: CardKind::Implementation,
+                memory_kind: MemoryKind::Implementation,
+                title: "Remove ChatAPI CRM create_case; persist crm_action from Atenea".to_owned(),
+                summary: "CRM path retired; ChatAPI stores history only.".to_owned(),
+                status: CardStatus::Active,
+                source_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                valid_from: Some(Utc::now()),
+                valid_until: None,
+                supersedes: None,
+                associated_files: Vec::new(),
+            },
+            Card {
+                id: CardId::from_persisted("db-users".to_owned()),
+                project_id: project_id.clone(),
+                kind: CardKind::Implementation,
+                memory_kind: MemoryKind::Implementation,
+                title: "Configure separate DB users for SQLx migrations and chatapi operations"
+                    .to_owned(),
+                summary: "Migration user owns DDL; app user has DML only.".to_owned(),
+                status: CardStatus::Active,
+                source_refs: Vec::new(),
+                evidence_refs: Vec::new(),
+                valid_from: Some(Utc::now()),
+                valid_until: None,
+                supersedes: None,
+                associated_files: Vec::new(),
+            },
+        ];
+        let transaction = store
+            .connection()
+            .unchecked_transaction()
+            .expect("fixture transaction should open");
+        for card in &cards {
+            Store::insert_card(&transaction, card).expect("fixture card should insert");
+        }
+        transaction.commit().expect("fixture cards should commit");
+
+        let task = "Configure separate DB users: one for SQLx migrations and another for chatapi app operations";
+        let broad = store
+            .search_cards(&project_id, task, false, 8)
+            .expect("broad search should succeed");
+        let deck = store
+            .search_cards_for_deck(&project_id, task, 3)
+            .expect("deck search should succeed");
+
+        assert_eq!(broad.len(), 2);
+        assert_eq!(deck.len(), 1);
+        assert_eq!(deck[0].id.as_str(), "db-users");
     }
 }

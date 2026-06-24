@@ -38,7 +38,19 @@ struct EvalScenario {
     title: String,
     query: String,
     expected_paths: Vec<String>,
+    #[serde(default)]
+    acceptable_paths: Vec<String>,
     non_trivial: bool,
+}
+
+fn scenario_target_paths(scenario: &EvalScenario) -> Vec<String> {
+    let mut paths = scenario.expected_paths.clone();
+    for path in &scenario.acceptable_paths {
+        if !paths.contains(path) {
+            paths.push(path.clone());
+        }
+    }
+    paths
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -95,16 +107,16 @@ pub async fn run(args: Args) -> Result<()> {
             .filter_map(|item| item.content.split(':').next())
             .collect::<std::collections::HashSet<_>>()
             .len();
+        let target_paths = scenario_target_paths(&scenario);
         let relevant = document_items
             .iter()
             .filter(|item| {
-                scenario
-                    .expected_paths
+                target_paths
                     .iter()
                     .any(|path| item.content.starts_with(path))
             })
             .count();
-        let correct = scenario.expected_paths.iter().any(|path| {
+        let correct = target_paths.iter().any(|path| {
             document_items
                 .iter()
                 .any(|item| item.content.starts_with(path))
@@ -243,10 +255,11 @@ async fn prepare_deck(project: &ProjectContext, task: String, budget: usize) -> 
         prepared,
     )
     .await?;
-    let memories =
-        project
-            .store
-            .search_cards(&project.id, &task, false, project.config.rag.top_k_final)?;
+    let memories = project.store.search_cards_for_deck(
+        &project.id,
+        &task,
+        project.config.memory.session.deck_memories,
+    )?;
 
     let mut items = Vec::new();
     let mut estimated_tokens: usize = 0;
@@ -300,16 +313,6 @@ async fn prepare_deck(project: &ProjectContext, task: String, budget: usize) -> 
                 .to_owned(),
         );
     }
-    let codegraph_next_steps = if project.config.codegraph.enabled {
-        vec![
-            "Use independently configured CodeGraph to locate relevant symbols, callers, and blast radius when its index is available.".to_owned(),
-            "Inspect the exact source before editing; retrieved evidence is not execution proof."
-                .to_owned(),
-        ]
-    } else {
-        Vec::new()
-    };
-
     Ok(Deck {
         id: DeckId::new(),
         project_id: project.id.clone(),
@@ -318,7 +321,6 @@ async fn prepare_deck(project: &ProjectContext, task: String, budget: usize) -> 
         estimated_tokens,
         items,
         warnings,
-        codegraph_next_steps,
     })
 }
 

@@ -25,9 +25,11 @@ and validation-gated transitions.
 
 | Mechanism | Scope | When |
 | --- | --- | --- |
-| `context_prepare` | Active memory + docs in one deck | Discover / Implement; once per task |
-| `memory_search` | Active (+ optional archive) | Deck memory gap, recall, overlap checks; compact hits (`title`, `summary`, freshness) |
+| `context_prepare` | Active memory + docs in one deck | Task bootstrap (Discover / Implement); once per task |
+| `memory_search` | Active (+ optional archive) | Mid-task when a concrete memory question remains; overlap/archive checks; compact hits (`title`, `summary`, freshness) |
 | `memory_get` | One card + freshness | After search or known card id; `detail=full` only for evidence refs and file hashes |
+| `rag_search` | Project docs | Mid-task when a concrete documentation question remains after source inspection |
+| `rag_get` | One doc chunk | Expand a chunk ref from the deck or `rag_search` |
 | `punchcard memory search --archive` | Failed / superseded / etc. | Same scope as MCP `memory_search` with `include_archive` |
 
 Associated file hashes are checked during retrieval. A mismatch yields

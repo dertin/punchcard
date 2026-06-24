@@ -1,21 +1,18 @@
-## MCP tools
+## MCP tools (by route)
 
-When the Punchcard MCP server is available, prefer these tools over duplicate CLI retrieval:
+When the Punchcard MCP server is available, prefer these tools over duplicate CLI retrieval.
 
-- `context_prepare` — bounded evidence deck for the task; pass `session_id` or `task_id` to seed it with recent working notes; with a shared `state_db` it may add a small `workspace` section pointing at sibling repos with task-relevant memory (leads only, not facts)
-- `rag_get` — expand one documentary chunk identified by the deck
-- `memory_search` / `memory_get` — compact recall by default (`id`, `title`, `summary`, freshness); `memory_get` with `detail=full` for evidence refs and file hashes
-- `memory_list` — list governed cards by status when the deck shows a memory gap
-- `memory_projects` — list every project registered in the shared database with its repository root
-- `memory_forget` — preview and invalidate active/stale cards (`dry_run` defaults to true); requires `card_title` when forgetting by id
-- `memory_review` — confirm, mark stale, or invalidate one card (requires `card_title`)
-- `change_begin`, `validation_run`, `change_fail`, `change_promote` — governed implementation history
-- `session_start`, `session_end`, `session_context` — ephemeral working session per codebase
-- `task_open`, `task_close`, `task_note_save`, `task_note_search`, `task_summary` — task-scoped working notes; subagents read a parent task with `include_ancestors`; use `format=text` on `task_summary` for compact replay
+**Discover:** `context_prepare`, `rag_get`, `rag_search`, `memory_search`, `memory_get`, `memory_list`, `memory_projects`
 
-Working notes (session/task) are ephemeral and never trusted memory; promote with `change_begin` to make them durable.
+**Implement:** `change_begin`, `validation_run`, `change_fail`, `change_promote`
 
-Do not call `rag_search` or `memory_search` after `context_prepare` unless the deck exposes a specific gap.
+**Session / task:** `session_start`, `session_end`, `session_context`, `task_open`, `task_close`, `task_note_save`, `task_note_search`, `task_summary`
+
+**Hygiene:** `memory_review`, `memory_forget` (`dry_run` defaults to true; `card_title` required when forgetting by id)
+
+Retrieval tools default to `format=markdown` (`format=json` for structured output). `context_prepare` accepts `session_id` or `task_id` to seed recent working notes; with a shared `state_db` it may add a small `workspace` section (leads only, not facts). `memory_get` with `detail=full` for evidence refs and file hashes.
+
+Working notes are ephemeral and never trusted memory; promote with `change_begin` to make them durable.
 
 ## Operator CLI
 

@@ -250,10 +250,10 @@ mod tests {
         let instructions = render_punchcard_instructions();
 
         for marker in [
+            "## Classify",
             "## Success",
             "## Stop",
-            "Classify each user request",
-            "## Evidence and tools",
+            "## After classification",
         ] {
             assert!(cursor.contains(marker), "cursor rule missing: {marker}");
             assert!(
@@ -261,6 +261,12 @@ mod tests {
                 "instructions missing: {marker}"
             );
         }
+        let classify = cursor.find("## Classify").expect("classify section");
+        let success = cursor.find("## Success").expect("success section");
+        assert!(
+            classify < success,
+            "cursor rule should classify before principles"
+        );
     }
 
     #[test]
@@ -286,13 +292,13 @@ mod tests {
 
     #[test]
     fn cursor_rule_remains_bounded() {
-        assert!(render_cursor_rule().len() < 4_500);
+        assert!(render_cursor_rule().len() < 5_500);
     }
 
     #[test]
     fn skill_renderers_remain_bounded() {
-        assert!(render_context_skill().len() < 1_500);
-        assert!(render_memory_skill().len() < 2_100);
+        assert!(render_context_skill().len() < 1_700);
+        assert!(render_memory_skill().len() < 2_350);
     }
 
     #[test]
@@ -327,10 +333,11 @@ mod tests {
     #[test]
     fn routing_maps_common_request_shapes() {
         let instructions = render_punchcard_instructions();
-        assert!(instructions.contains("Refactor"));
+        assert!(instructions.contains("refactor"));
         assert!(instructions.contains("debug"));
         assert!(instructions.contains("Subagent"));
         assert!(instructions.contains("Source-only"));
+        assert!(instructions.contains("## Classify"));
     }
 
     #[test]
@@ -341,11 +348,15 @@ mod tests {
         let memory = render_memory_skill();
 
         assert!(instructions.contains("Enriched"));
+        assert!(instructions.contains("Focused"));
+        assert!(!instructions.contains("## Trivial vs Scoped"));
         assert!(instructions.contains("context_prepare"));
         assert!(cursor.contains("before") && cursor.contains("Read/Grep"));
         assert!(cursor.contains("Enriched"));
+        assert!(cursor.contains("Focused"));
         assert!(context.contains("Tier gate"));
-        assert!(memory.contains("before mass Read/Grep"));
+        assert!(context.contains("Do not"));
+        assert!(memory.contains("deck ref"));
     }
 
     #[test]

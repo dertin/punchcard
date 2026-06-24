@@ -499,6 +499,32 @@ pub struct DeckItem {
     pub untrusted_content: bool,
 }
 
+/// One evidence item returned to agents from `context_prepare`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentDeckItem {
+    /// Item category such as `memory`, `document`, `hint`, or `observation`.
+    pub category: String,
+    /// Stable reference for `memory_get` / `rag_get` / paths.
+    pub reference: String,
+    /// Compact title.
+    pub title: String,
+    /// Bounded excerpt or summary; empty for path hints.
+    pub content: String,
+    /// Present only for untrusted documentary evidence.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub untrusted: bool,
+}
+
+/// Bounded evidence deck for agent consumption.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AgentDeck {
+    /// Evidence selected for the task.
+    pub items: Vec<AgentDeckItem>,
+    /// Freshness or integration warnings worth acting on.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
+}
+
 /// Ephemeral, budgeted context prepared for one task.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Deck {
@@ -516,8 +542,31 @@ pub struct Deck {
     pub items: Vec<DeckItem>,
     /// Freshness and contradiction warnings.
     pub warnings: Vec<String>,
-    /// Suggested structural checks using independently configured `CodeGraph`.
-    pub codegraph_next_steps: Vec<String>,
+}
+
+impl Deck {
+    /// Returns the agent-facing view without operator telemetry or workflow boilerplate.
+    #[must_use]
+    pub fn for_agent(&self) -> AgentDeck {
+        AgentDeck {
+            items: self
+                .items
+                .iter()
+                .map(|item| AgentDeckItem {
+                    category: item.category.clone(),
+                    reference: item.reference.clone(),
+                    title: item.title.clone(),
+                    content: if item.category == "hint" {
+                        String::new()
+                    } else {
+                        item.content.clone()
+                    },
+                    untrusted: item.untrusted_content,
+                })
+                .collect(),
+            warnings: self.warnings.clone(),
+        }
+    }
 }
 
 /// Lifecycle state of a working session.
@@ -751,6 +800,9 @@ pub struct SessionSettings {
     /// Maximum task observations injected into a deck by `context_prepare`.
     #[serde(default = "default_deck_observations")]
     pub deck_observations: usize,
+    /// Maximum governed-memory cards injected into a deck by `context_prepare`.
+    #[serde(default = "default_deck_memories")]
+    pub deck_memories: usize,
 }
 
 impl Default for SessionSettings {
@@ -760,6 +812,7 @@ impl Default for SessionSettings {
             observation_retention_days: default_observation_retention_days(),
             max_observations: default_max_observations(),
             deck_observations: default_deck_observations(),
+            deck_memories: default_deck_memories(),
         }
     }
 }
@@ -778,6 +831,10 @@ const fn default_max_observations() -> usize {
 
 const fn default_deck_observations() -> usize {
     5
+}
+
+const fn default_deck_memories() -> usize {
+    3
 }
 
 /// Project display settings.
@@ -1240,5 +1297,43 @@ mod tests {
         assert!(config.decks.persist);
         assert_eq!(config.decks.retention_count, 50);
         assert_eq!(config.decks.retention_days, 0);
+    }
+
+    #[test]
+    fn deck_for_agent_strips_operator_metadata() {
+        let deck = super::Deck {
+            id: super::DeckId::new(),
+            project_id: super::ProjectId::from_persisted("p".to_owned()),
+            task: "task".to_owned(),
+            token_budget: 3_000,
+            estimated_tokens: 42,
+            items: vec![
+                super::DeckItem {
+                    category: "memory".to_owned(),
+                    reference: "card".to_owned(),
+                    title: "Title".to_owned(),
+                    content: "What: detail".to_owned(),
+                    inclusion_reason: "matched".to_owned(),
+                    estimated_tokens: 10,
+                    untrusted_content: false,
+                },
+                super::DeckItem {
+                    category: "hint".to_owned(),
+                    reference: "src/main.rs".to_owned(),
+                    title: "src/main.rs".to_owned(),
+                    content: "Caller-provided path or symbol hint: src/main.rs".to_owned(),
+                    inclusion_reason: "hint".to_owned(),
+                    estimated_tokens: 5,
+                    untrusted_content: false,
+                },
+            ],
+            warnings: Vec::new(),
+        };
+
+        let agent = deck.for_agent();
+        assert_eq!(agent.items.len(), 2);
+        assert!(agent.items[0].content.contains("What:"));
+        assert!(agent.items[1].content.is_empty());
+        assert!(!agent.items[0].untrusted);
     }
 }

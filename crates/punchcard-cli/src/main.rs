@@ -1566,10 +1566,10 @@ async fn prepare_deck(project: &ProjectContext, task: String, budget: usize) -> 
         .iter()
         .map(|hit| format!("{} {}", hit.title_path, hit.excerpt))
         .collect();
-    let memories =
-        project
-            .store
-            .search_cards(&project.id, &task, false, project.config.rag.top_k_final)?;
+    let memory_limit = project.config.memory.session.deck_memories;
+    let memories = project
+        .store
+        .search_cards_for_deck(&project.id, &task, memory_limit)?;
     let mut items = Vec::new();
     let mut estimated_tokens: usize = 0;
     push_current_repo_items(
@@ -1600,15 +1600,6 @@ async fn prepare_deck(project: &ProjectContext, task: String, budget: usize) -> 
                 .to_owned(),
         );
     }
-    let codegraph_next_steps = if project.config.codegraph.enabled {
-        vec![
-            "Use independently configured CodeGraph to locate relevant symbols, callers, and blast radius when its index is available.".to_owned(),
-            "Inspect the exact source before editing; retrieved evidence is not execution proof."
-                .to_owned(),
-        ]
-    } else {
-        Vec::new()
-    };
     Ok(Deck {
         id: DeckId::new(),
         project_id: project.id.clone(),
@@ -1617,7 +1608,6 @@ async fn prepare_deck(project: &ProjectContext, task: String, budget: usize) -> 
         estimated_tokens,
         items,
         warnings,
-        codegraph_next_steps,
     })
 }
 

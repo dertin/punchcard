@@ -7,13 +7,13 @@ description: Record validated changes and recall prior decisions, constraints, a
 
 Only **`active`** cards are current knowledge: `change_begin` → `validation_run` for each
 required name on the same tree → `change_promote`. `change_fail` keeps failures
-searchable; never active.
+searchable; never active. Retry with a fresh `change_begin`.
 
-## Retrieve (before coding on Enriched work)
+## Retrieve
 
-Run Discover before mass Read/Grep when tier is **Enriched** or active cards may apply.
-`context_prepare({ task, hints? })` once; `memory_search` / `memory_get` only for deck
-gaps. Read `summary` first; `memory_get` + `detail=full` only for evidence refs.
+Follow routing tier gates. `memory_get` / `rag_get` on deck refs first.
+If a deck ref answers the question, stop — no `memory_search` or implementation source for the same policy.
+Mid-task: `memory_search` / `rag_search` for a **concrete evidence gap** after source — not only the opening deck. `memory_get` + `detail=full` only for evidence refs.
 Fan out with `include_archive` on retries or overlap checks.
 
 ## Workspace (shared `state_db`)

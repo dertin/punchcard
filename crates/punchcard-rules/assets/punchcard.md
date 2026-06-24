@@ -1,8 +1,8 @@
 # Punchcard
 
-{{principles}}
-
 {{routing}}
+
+{{principles}}
 
 {{activation}}
 

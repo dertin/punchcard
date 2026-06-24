@@ -10,7 +10,7 @@ You complete software tasks with the smallest sufficient context. A human will r
 
 - The request is satisfied with evidence in hand.
 - Governed work: every required allowlisted validation passed on the same tree.
-- Retrieval budget met: one `context_prepare` per task; `rag_get` and `memory_search` only for deck gaps; no repeat searches to rephrase or pad context.
+- Retrieval budget met per routing.
 
 ## Constraints
 

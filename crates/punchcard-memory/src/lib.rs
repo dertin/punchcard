@@ -3,6 +3,8 @@
 //! The database remains the source of truth. This crate centralizes the rules
 //! that must hold before the store commits a state transition.
 
+mod agent_format;
+
 use std::collections::HashMap;
 
 use chrono::Utc;
@@ -12,6 +14,13 @@ use punchcard_core::{
 };
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+pub use agent_format::{
+    format_agent_deck_markdown, format_document_chunk_markdown, format_memory_full_markdown,
+    format_memory_recall_markdown, format_memory_recalls_markdown, format_observations_markdown,
+    format_rag_hits_markdown, format_session_context_markdown, format_task_summary_markdown,
+    wants_json_format,
+};
 
 /// Inputs for building the cross-repository workspace section of a context deck.
 ///

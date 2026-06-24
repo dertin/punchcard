@@ -6,22 +6,25 @@ use std::time::Instant;
 use chrono::Utc;
 use punchcard_core::{
     Actor, Card, CardId, CardKind, CardStatus, ChangeId, ChangeIntent, Deck, DeckId, DeckItem,
-    DocumentChunk, MemoryKind, MemoryRecallHit, MemoryReviewAction, MemorySearchHit,
-    ObservationKind, ProjectConfig, ProjectId, ProjectRecord, RagSearchHit, Session, SessionId,
-    Task, TaskId, TaskObservation, ValidationEvidence,
+    MemoryKind, MemoryRecallHit, MemoryReviewAction, MemorySearchHit, ObservationKind,
+    ProjectConfig, ProjectId, ProjectRecord, RagSearchHit, Session, SessionId, Task, TaskId,
+    TaskObservation, ValidationEvidence,
 };
 use punchcard_integrations::{
     find_git_root, fingerprint_project_files, load_config, resolve_state_db_path, run_validation,
 };
 use punchcard_memory::{
-    WorkspacePointerInput, memory_recall_hit, memory_search_hit_for_card, prepare_promotion,
-    workspace_pointers,
+    WorkspacePointerInput, format_agent_deck_markdown, format_document_chunk_markdown,
+    format_memory_full_markdown, format_memory_recall_markdown, format_memory_recalls_markdown,
+    format_observations_markdown, format_rag_hits_markdown, format_session_context_markdown,
+    format_task_summary_markdown, memory_recall_hit, memory_search_hit_for_card, prepare_promotion,
+    wants_json_format, workspace_pointers,
 };
-use punchcard_store::{GovernedForgetRequest, Store, format_task_summary_text};
+use punchcard_store::{GovernedForgetRequest, Store};
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::{router::tool::ToolRouter, wrapper::Json, wrapper::Parameters},
-    model::{Implementation, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, Implementation, IntoContents, ServerCapabilities, ServerInfo},
     schemars, tool, tool_handler, tool_router,
 };
 use serde::{Deserialize, Serialize};
@@ -120,12 +123,18 @@ struct SearchInput {
     /// Search every project registered in a shared `state_db`.
     #[serde(default)]
     include_workspace: bool,
+    /// `markdown` (default) for agent-readable text or `json` for structured output.
+    #[serde(default = "default_retrieval_format")]
+    format: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct IdInput {
     /// Stable card, chunk, or change identifier.
     id: String,
+    /// `markdown` (default) for agent-readable text or `json` for structured output.
+    #[serde(default = "default_retrieval_format")]
+    format: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -134,6 +143,9 @@ struct MemoryGetInput {
     id: String,
     /// Set to `full` for evidence refs, associated file hashes, and timestamps.
     detail: Option<String>,
+    /// `markdown` (default) for agent-readable text or `json` for structured output.
+    #[serde(default = "default_retrieval_format")]
+    format: String,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -164,6 +176,9 @@ struct ContextPrepareInput {
     session_id: Option<String>,
     /// Optional task whose subtree observations seed the deck first.
     task_id: Option<String>,
+    /// `markdown` (default) for agent-readable text or `json` for structured output.
+    #[serde(default = "default_retrieval_format")]
+    format: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -291,8 +306,8 @@ struct MemoryForgetOutput {
 struct TaskSummaryInput {
     /// Task to summarize.
     task_id: String,
-    /// `json` (default) or compact `text` markdown.
-    #[serde(default = "default_task_summary_format")]
+    /// `markdown` (default) for agent-readable text or `json` for structured output.
+    #[serde(default = "default_retrieval_format", alias = "text")]
     format: String,
 }
 
@@ -370,6 +385,9 @@ struct SessionContextInput {
     session_id: Option<String>,
     /// Optional maximum observation count.
     limit: Option<usize>,
+    /// `markdown` (default) for agent-readable text or `json` for structured output.
+    #[serde(default = "default_retrieval_format")]
+    format: String,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -424,6 +442,9 @@ struct TaskNoteSearchInput {
     include_ancestors: bool,
     /// Optional maximum result count.
     limit: Option<usize>,
+    /// `markdown` (default) for agent-readable text or `json` for structured output.
+    #[serde(default = "default_retrieval_format")]
+    format: String,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -482,7 +503,7 @@ impl PunchcardServer {
     async fn context_prepare(
         &self,
         Parameters(input): Parameters<ContextPrepareInput>,
-    ) -> Result<Json<Deck>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let budget = input.budget.unwrap_or(3_000);
@@ -517,14 +538,10 @@ impl PunchcardServer {
         )
         .await
         .map_err(|error| error.to_string())?;
+        let memory_limit = project.config.memory.session.deck_memories;
         let memories = project
             .store
-            .search_cards(
-                &project.id,
-                &input.task,
-                false,
-                project.config.rag.top_k_final,
-            )
+            .search_cards_for_deck(&project.id, &input.task, memory_limit)
             .map_err(|error| error.to_string())?;
         let document_excerpts: Vec<String> = documents
             .iter()
@@ -598,7 +615,6 @@ impl PunchcardServer {
             );
         }
         for hint in input.hints {
-            let content = format!("Caller-provided path or symbol hint: {hint}");
             include_item(
                 &mut items,
                 &mut estimated_tokens,
@@ -607,8 +623,8 @@ impl PunchcardServer {
                     category: "hint".to_owned(),
                     reference: hint.clone(),
                     title: hint,
-                    estimated_tokens: estimate_tokens(&content),
-                    content,
+                    estimated_tokens: 0,
+                    content: String::new(),
                     inclusion_reason: "the caller identified this path or symbol".to_owned(),
                     untrusted_content: false,
                 },
@@ -643,14 +659,6 @@ impl PunchcardServer {
                     .to_owned(),
             );
         }
-        let codegraph_next_steps = if project.config.codegraph.enabled {
-            vec![
-                "Use independently configured CodeGraph to locate symbols, callers, and blast radius when its index is available.".to_owned(),
-                "Inspect exact source and executable contracts before editing.".to_owned(),
-            ]
-        } else {
-            Vec::new()
-        };
         let deck = Deck {
             id: DeckId::new(),
             project_id: project.id.clone(),
@@ -659,7 +667,6 @@ impl PunchcardServer {
             estimated_tokens,
             items,
             warnings,
-            codegraph_next_steps,
         };
         let bytes = serde_json::to_vec(&deck).map_or(0, |value| value.len());
         record_tool(
@@ -669,7 +676,8 @@ impl PunchcardServer {
             deck.items.len(),
             bytes,
         );
-        Ok(Json(deck))
+        let agent = deck.for_agent();
+        retrieval_response(&input.format, format_agent_deck_markdown(&agent), agent)
     }
 
     /// Search the local indexed project documentation and return compact citations. This does not modify state.
@@ -686,7 +694,7 @@ impl PunchcardServer {
     async fn rag_search(
         &self,
         Parameters(input): Parameters<SearchInput>,
-    ) -> Result<Json<RagSearchOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let prepared = punchcard_rag::prepare_search(
@@ -708,7 +716,11 @@ impl PunchcardServer {
         let output = RagSearchOutput { results: hits };
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
         record_tool(&project, "rag_search", started, output.results.len(), bytes);
-        Ok(Json(output))
+        retrieval_response(
+            &input.format,
+            format_rag_hits_markdown(&output.results),
+            output,
+        )
     }
 
     /// Read one previously indexed documentary chunk by ID. This does not modify state.
@@ -725,7 +737,7 @@ impl PunchcardServer {
     async fn rag_get(
         &self,
         Parameters(input): Parameters<IdInput>,
-    ) -> Result<Json<DocumentChunk>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let chunk = project
@@ -733,7 +745,7 @@ impl PunchcardServer {
             .get_document_chunk(&input.id)
             .map_err(|error| error.to_string())?;
         record_tool(&project, "rag_get", started, 1, chunk.content.len());
-        Ok(Json(chunk))
+        retrieval_response(&input.format, format_document_chunk_markdown(&chunk), chunk)
     }
 
     /// Read local documentary index status without downloading models or modifying state.
@@ -800,7 +812,7 @@ impl PunchcardServer {
     async fn memory_search(
         &self,
         Parameters(input): Parameters<SearchInput>,
-    ) -> Result<Json<MemorySearchOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let cards = if input.include_workspace {
@@ -838,7 +850,11 @@ impl PunchcardServer {
             output.cards.len(),
             bytes,
         );
-        Ok(Json(output))
+        retrieval_response(
+            &input.format,
+            format_memory_recalls_markdown(&output.cards),
+            output,
+        )
     }
 
     /// Read one governed memory card. Default: compact recall (`id`, `title`, `summary`, freshness). Set `detail=full` for evidence refs and file hashes.
@@ -855,7 +871,7 @@ impl PunchcardServer {
     async fn memory_get(
         &self,
         Parameters(input): Parameters<MemoryGetInput>,
-    ) -> Result<Json<MemoryGetOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let id = CardId::parse(input.id).map_err(|error| error.to_string())?;
@@ -864,20 +880,26 @@ impl PunchcardServer {
             .get_card(&id)
             .map_err(|error| error.to_string())?;
         let hit = memory_search_hit(&project, &self.root, card);
-        let response = if wants_full_detail(input.detail.as_deref()) {
-            MemoryGetOutput {
-                recall: None,
-                full: Some(hit),
-            }
-        } else {
-            MemoryGetOutput {
-                recall: Some(memory_recall_hit(&hit)),
-                full: None,
-            }
-        };
-        let bytes = serde_json::to_vec(&response).map_or(0, |value| value.len());
+        let bytes = serde_json::to_vec(&hit).map_or(0, |value| value.len());
         record_tool(&project, "memory_get", started, 1, bytes);
-        Ok(Json(response))
+        if wants_full_detail(input.detail.as_deref()) {
+            let response = MemoryGetOutput {
+                recall: None,
+                full: Some(hit.clone()),
+            };
+            retrieval_response(&input.format, format_memory_full_markdown(&hit), response)
+        } else {
+            let recall = memory_recall_hit(&hit);
+            let response = MemoryGetOutput {
+                recall: Some(recall.clone()),
+                full: None,
+            };
+            retrieval_response(
+                &input.format,
+                format_memory_recall_markdown(&recall),
+                response,
+            )
+        }
     }
 
     /// Create an append-only draft change record. This does not activate or replace current project memory.
@@ -1304,7 +1326,7 @@ impl PunchcardServer {
     async fn session_context(
         &self,
         Parameters(input): Parameters<SessionContextInput>,
-    ) -> Result<Json<SessionContextOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let session = match input.session_id {
@@ -1338,7 +1360,15 @@ impl PunchcardServer {
             output.recent_observations.len(),
             bytes,
         );
-        Ok(Json(output))
+        retrieval_response(
+            &input.format,
+            format_session_context_markdown(
+                &output.session,
+                &output.tasks,
+                &output.recent_observations,
+            ),
+            output,
+        )
     }
 
     /// Open a task inside a session, optionally nested under a parent task for subagent coordination.
@@ -1464,7 +1494,7 @@ impl PunchcardServer {
     async fn task_note_search(
         &self,
         Parameters(input): Parameters<TaskNoteSearchInput>,
-    ) -> Result<Json<TaskNoteSearchOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let task_id = input
@@ -1491,7 +1521,11 @@ impl PunchcardServer {
             output.observations.len(),
             bytes,
         );
-        Ok(Json(output))
+        retrieval_response(
+            &input.format,
+            format_observations_markdown(&output.observations),
+            output,
+        )
     }
 
     /// Summarize a task from its observations. This does not modify state.
@@ -1508,7 +1542,7 @@ impl PunchcardServer {
     async fn task_summary(
         &self,
         Parameters(input): Parameters<TaskSummaryInput>,
-    ) -> Result<Json<TaskSummaryOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let task_id = TaskId::parse(input.task_id).map_err(|error| error.to_string())?;
@@ -1520,7 +1554,6 @@ impl PunchcardServer {
             .store
             .observation_list(&task_id, 1_000)
             .map_err(|error| error.to_string())?;
-        let text_format = input.format.eq_ignore_ascii_case("text");
         let collect = |kind: ObservationKind| {
             observations
                 .iter()
@@ -1528,29 +1561,15 @@ impl PunchcardServer {
                 .cloned()
                 .collect::<Vec<_>>()
         };
-        let output = if text_format {
-            let text = format_task_summary_text(&task, &observations);
-            TaskSummaryOutput {
-                task,
-                discoveries: Vec::new(),
-                blockers: Vec::new(),
-                handoffs: Vec::new(),
-                summaries: Vec::new(),
-                notes: Vec::new(),
-                observation_count: observations.len(),
-                text: Some(text),
-            }
-        } else {
-            TaskSummaryOutput {
-                task,
-                discoveries: collect(ObservationKind::Discovery),
-                blockers: collect(ObservationKind::Blocker),
-                handoffs: collect(ObservationKind::Handoff),
-                summaries: collect(ObservationKind::Summary),
-                notes: collect(ObservationKind::Note),
-                observation_count: observations.len(),
-                text: None,
-            }
+        let output = TaskSummaryOutput {
+            task: task.clone(),
+            discoveries: collect(ObservationKind::Discovery),
+            blockers: collect(ObservationKind::Blocker),
+            handoffs: collect(ObservationKind::Handoff),
+            summaries: collect(ObservationKind::Summary),
+            notes: collect(ObservationKind::Note),
+            observation_count: observations.len(),
+            text: None,
         };
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
         record_tool(
@@ -1560,7 +1579,28 @@ impl PunchcardServer {
             output.observation_count,
             bytes,
         );
-        Ok(Json(output))
+        retrieval_response(
+            &input.format,
+            format_task_summary_markdown(&task, &observations),
+            output,
+        )
+    }
+}
+
+fn default_retrieval_format() -> String {
+    "markdown".to_owned()
+}
+
+fn retrieval_response<T: Serialize>(
+    format: &str,
+    markdown: String,
+    json: T,
+) -> Result<CallToolResult, String> {
+    if wants_json_format(format) {
+        let value = serde_json::to_value(json).map_err(|error| error.to_string())?;
+        Ok(CallToolResult::structured(value))
+    } else {
+        Ok(CallToolResult::success(markdown.into_contents()))
     }
 }
 
@@ -1700,10 +1740,6 @@ const fn default_true() -> bool {
 
 fn default_forget_note() -> String {
     "forgotten via operator review".to_owned()
-}
-
-fn default_task_summary_format() -> String {
-    "json".to_owned()
 }
 
 /// MCP startup failures.

@@ -10,7 +10,7 @@ Punchcard owns its governed-memory implementation. CodeGraph is an optional inde
 
 Installing Punchcard adds rules, skills, and an MCP server to your agent (Cursor or Codex). The agent uses them automatically as it works; you don't run them by hand or pick a "mode". What changes is how much context the agent gathers and how it records what it learns:
 
-- **Quick, well-scoped questions** — when the relevant files are already known, the agent just reads them. Punchcard stays out of the way and adds no overhead.
+- **Quick, well-defined questions** — when the relevant files are already known, the agent just reads them. Punchcard stays out of the way and adds no overhead.
 - **Open-ended work** (debugging, refactors, exploring unfamiliar code) — Punchcard builds a bounded evidence deck: cited documentary retrieval over your docs and code, plus relevant past decisions. The agent grounds its work in real source instead of guessing, while staying within a token budget.
 - **Changes that should outlive the session** — Punchcard records them as project memory only after your configured validations (format, build, tests, lint) pass on the same code. Failed attempts stay in searchable history; they never become current knowledge.
 

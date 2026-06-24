@@ -253,6 +253,7 @@ fn lint_memory_table(value: &toml::Value, findings: &mut Vec<ConfigLintFinding>)
                     "observation_retention_days",
                     "max_observations",
                     "deck_observations",
+                    "deck_memories",
                 ],
                 "memory.session",
                 findings,

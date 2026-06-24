@@ -5,8 +5,8 @@ alwaysApply: true
 
 # Punchcard
 
-{{principles}}
-
 {{routing}}
+
+{{principles}}
 
 {{workflow}}

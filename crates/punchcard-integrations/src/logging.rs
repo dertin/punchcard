@@ -384,7 +384,6 @@ mod tests {
             estimated_tokens: 10,
             items: Vec::new(),
             warnings: Vec::new(),
-            codegraph_next_steps: Vec::new(),
         }
     }
 
