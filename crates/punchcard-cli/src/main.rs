@@ -22,7 +22,7 @@ use punchcard_integrations::{
     set_rag_embedding_model, uninstall_plugin, upgrade_plugin,
 };
 use punchcard_memory::{
-    WorkspacePointerInput, memory_recall_hit, memory_search_hit_for_card, prepare_promotion,
+    WorkspacePointerInput, governed_memory_hit_for_card, memory_recall_hit, prepare_promotion,
     workspace_pointers,
 };
 use punchcard_security::{
@@ -410,7 +410,7 @@ struct PluginSourceArgs {
     /// Agent integration target.
     #[arg(value_enum)]
     target: Target,
-    /// Parent directory containing `cursor/` and `punchcard/`.
+    /// Parent directory containing `cursor/` and `codex/`.
     #[arg(long, default_value = "plugins")]
     local_source: PathBuf,
 }
@@ -450,11 +450,11 @@ struct ProjectContext {
     store: Store,
 }
 
-fn memory_search_hit(
+fn governed_memory_hit(
     context: &ProjectContext,
     card: punchcard_core::Card,
 ) -> punchcard_core::MemorySearchHit {
-    memory_search_hit_for_card(
+    governed_memory_hit_for_card(
         card,
         &context.id,
         &context.root,
@@ -472,13 +472,13 @@ fn print_memory_recall_hits(
     if full {
         let hits: Vec<_> = cards
             .into_iter()
-            .map(|card| memory_search_hit(context, card))
+            .map(|card| governed_memory_hit(context, card))
             .collect();
         print_serializable(cli.json, &hits)
     } else {
         let hits: Vec<_> = cards
             .into_iter()
-            .map(|card| memory_recall_hit(&memory_search_hit(context, card)))
+            .map(|card| memory_recall_hit(&governed_memory_hit(context, card)))
             .collect();
         print_serializable(cli.json, &hits)
     }
@@ -706,7 +706,7 @@ fn command_memory(cli: &Cli, command: MemoryCommand) -> Result<()> {
         }
         MemoryCommand::Get { id, full } => {
             let card = context.store.get_card(&CardId::parse(id)?)?;
-            let hit = memory_search_hit(&context, card);
+            let hit = governed_memory_hit(&context, card);
             if full {
                 print_serializable(cli.json, &hit)?;
             } else {
@@ -1269,9 +1269,7 @@ fn command_doctor(cli: &Cli) -> Result<()> {
             context
                 .root
                 .join("plugins/cursor/.cursor-plugin/plugin.json"),
-            context
-                .root
-                .join("plugins/punchcard/.codex-plugin/plugin.json"),
+            context.root.join("plugins/codex/.codex-plugin/plugin.json"),
         ];
         let plugin_versions = plugin_manifests
             .iter()

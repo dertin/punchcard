@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["vendored-protoc"]
+vendored-protoc = ["lance/protoc", "lance-datafusion/protoc"]
+
 [dependencies]
 arrow-array.workspace = true
 arrow-schema.workspace = true

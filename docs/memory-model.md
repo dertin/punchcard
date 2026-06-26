@@ -25,23 +25,23 @@ and validation-gated transitions.
 
 | Mechanism | Scope | When |
 | --- | --- | --- |
-| `context_prepare` | Active memory + docs in one deck | Task bootstrap (Discover / Implement); once per task |
-| `memory_search` | Active (+ optional archive) | Mid-task when a concrete memory question remains; overlap/archive checks; compact hits (`title`, `summary`, freshness) |
-| `memory_get` | One card + freshness | After search or known card id; `detail=full` only for evidence refs and file hashes |
-| `rag_search` | Project docs | Mid-task when a concrete documentation question remains after source inspection |
-| `rag_get` | One doc chunk | Expand a chunk ref from the deck or `rag_search` |
-| `punchcard memory search --archive` | Failed / superseded / etc. | Same scope as MCP `memory_search` with `include_archive` |
+| `get_context` | Active memory + docs in one deck | Task bootstrap (Discover / Implement); once per task |
+| `search_memory` | Active (+ optional archive) | Mid-task when a concrete memory question remains; overlap/archive checks; compact hits (`title`, `summary`, freshness) |
+| `read_memory` | One card + freshness | After search or known card id; `detail=full` only for evidence refs and file hashes |
+| `search_docs` | Project docs | Mid-task when a concrete documentation question remains after source inspection |
+| `read_doc` | One doc chunk | Expand a chunk ref from the deck or `search_docs` |
+| `punchcard memory search --archive` | Failed / superseded / etc. | Same scope as MCP `search_memory` with `include_archive` |
 
 Associated file hashes are checked during retrieval. A mismatch yields
-`possibly_stale` without silently invalidating the card. `memory_review` can
+`possibly_stale` without silently invalidating the card. `review_memory` can
 confirm inspection, mark stale, or invalidate with an append-only event.
 
 ## Storage (Implement route)
 
 ```text
-change_begin → validation evidence → change_promote → active card
+start_change → validation evidence → save_memory → active card
                      ↓
-               change_fail → failed / incomplete (archive)
+               record_change_failure → failed / incomplete (archive)
 ```
 
 Promotion requires every configured validation to have a latest **passed** record
@@ -49,9 +49,9 @@ for the **same working-tree hash**. Missing, failed, timed-out, or mixed-tree
 evidence rejects promotion. Supersession requires the referenced card still to be
 `active` at commit time.
 
-A failed or interrupted implementation attempt is **recorded** with `change_fail`
+A failed or interrupted implementation attempt is **recorded** with `record_change_failure`
 (state `failed` or `incomplete`) and stays searchable in the archive. You then
-**retry** with a fresh `change_begin`; the failed attempt never replaces or
+**retry** with a fresh `start_change`; the failed attempt never replaces or
 overwrites `active` memory, so current knowledge is preserved across retries.
 
 ## Card shape
@@ -85,14 +85,14 @@ scoped to one codebase for in-flight coordination, including multiple subagents.
 
 Operate the layer with `punchcard session …` and `punchcard task …` (CLI) or the
 `session_*` / `task_*` MCP tools. A subagent reads its parent's context with
-`task_note_search --ancestors`. `context_prepare` accepts an optional
+`search_task_notes --ancestors`. `get_context` accepts an optional
 `session_id` / `task_id` and seeds the deck with recent observations **before**
 active memory and docs.
 
 Observations are ephemeral: they are pruned by `memory.session` retention
 (`observation_retention_days`, `max_observations`) and are **never** trusted
 current knowledge. To make a finding durable, promote it through
-`change_begin → validation → change_promote`. Forgetting works at both layers:
+`start_change → validation → save_memory`. Forgetting works at both layers:
 `punchcard task note forget` removes observations; `punchcard memory forget`
 invalidates active/stale cards through governed transitions (never silent
 deletion), with `--dry-run` previews.
@@ -100,7 +100,7 @@ deletion), with `--dry-run` previews.
 ## Promotion policy
 
 Punchcard promotes findings to active memory only after allowlisted validation
-on the same working tree. Use `change_fail` and `memory search --archive` for failed
+on the same working tree. Use `record_change_failure` and `memory search --archive` for failed
 attempts instead of writing unvalidated facts into active memory.
 
 ## Export and integrity
@@ -123,16 +123,16 @@ Run `punchcard init` in each repo (config and RAG stay per repo). Each repo keep
 `projects` table stores each repo's canonical `root_path` and display `name` (refreshed on
 `punchcard init` / MCP open).
 
-Use `punchcard memory search --workspace` or MCP `memory_search` with `include_workspace: true`
+Use `punchcard memory search --workspace` or MCP `search_memory` with `include_workspace: true`
 to search active memory across all projects in the database. Hits include `project_name`,
 `project_root`, and `is_current_project` so agents can tell current-repo knowledge from a
-sibling repo. List registered projects with `punchcard memory projects` or MCP `memory_projects`.
+sibling repo. List registered projects with `punchcard memory projects` or MCP `list_memory_projects`.
 Promotion, validation, and `associated_files` remain scoped to the MCP/CLI session root;
 RAG stays single-repo.
 
-### Workspace pointers in `context_prepare`
+### Workspace pointers in `get_context`
 
-When the shared database has sibling repos, `context_prepare` can append a small `workspace`
+When the shared database has sibling repos, `get_context` can append a small `workspace`
 section so the agent knows related repos exist without polluting the task deck. The section is
 governed by `[memory.workspace]`:
 
@@ -152,5 +152,5 @@ Behavior and anti-noise guarantees:
   or when this repo's retrieved docs reference its name or directory. When siblings exist but
   none are relevant, a single terse map line records their existence and location.
 - Each pointer is a lead (repo name, root, match count, top card titles), not the sibling's
-  full card content. The agent follows up with `memory_search --workspace` only on a real gap.
+  full card content. The agent follows up with `search_memory --workspace` only on a real gap.
 - Pointers carry `category = "workspace"`; promotion and freshness stay scoped to the session repo.

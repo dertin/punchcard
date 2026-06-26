@@ -1,15 +1,17 @@
 # Codex integration
 
-The Codex plugin lives in `plugins/punchcard`; current tooling requires the
-directory and manifest names to match. It bundles `.mcp.json`, context and
-memory skills, and the plugin manifest.
+The Codex plugin source lives in `plugins/codex`. It bundles `.mcp.json`,
+context and memory skills, and the plugin manifest. Installation still copies
+it to `~/.codex/plugins/codex/codex` and registers it as
+`punchcard@punchcard`; the selector follows the Codex marketplace id and plugin
+id, while filesystem directories stay agent-named.
 
 The skills, hooks, manifest, and generated `punchcard.md` instructions are rendered from
 `crates/punchcard-rules/assets`. Do not edit generated copies directly; run
 `./scripts/agent-assets.sh sync` after changing the canonical source.
 
 Installation is global, like Cursor: the bundle is copied to
-`~/.codex/plugins/punchcard/punchcard` and registered once as `punchcard@punchcard`
+`~/.codex/plugins/codex/codex` and registered once as `punchcard@punchcard`
 in `~/.codex/config.toml`. No per-repository `.agents/` files are required.
 
 ```bash

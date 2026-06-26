@@ -6,7 +6,9 @@ The project-level validation policy lives in
 [`.punchcard/config.toml`](../.punchcard/config.toml). See
 [Configuration](configuration.md) for the full option reference and for which
 commands write the file.
-It defines the required checks and their allowlisted commands:
+The allowlisted validation commands are defined under
+`[validation.commands.<name>]`; `[validation].required` names the checks that
+must pass before promotion:
 
 - `fmt`
 - `check`

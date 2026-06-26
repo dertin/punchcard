@@ -3,15 +3,10 @@
 use std::fmt::Write as _;
 
 use punchcard_core::{
-    AgentDeck, AgentDeckItem, DocumentChunk, MemoryRecallHit, MemorySearchHit, ObservationKind,
-    RagSearchHit, Session, Task, TaskObservation,
+    AgentDeck, AgentDeckItem, Card, ChangeIntent, DocumentChunk, MemoryRecallHit, MemorySearchHit,
+    ObservationKind, RagSearchHit, Session, SessionStatus, Task, TaskObservation, TaskStatus,
+    ValidationEvidence, ValidationStatus,
 };
-
-/// Returns true when the caller requested structured JSON instead of markdown.
-#[must_use]
-pub fn wants_json_format(format: &str) -> bool {
-    format.eq_ignore_ascii_case("json")
-}
 
 /// Renders a bounded evidence deck for agent consumption.
 #[must_use]
@@ -76,7 +71,7 @@ fn append_deck_section(
             }
             "memory" => {
                 let _ = writeln!(output, "### {}\n", item.title.trim());
-                let _ = writeln!(output, "`memory_get`: {}\n", item.reference);
+                let _ = writeln!(output, "`read_memory`: {}\n", item.reference);
                 if !item.content.is_empty() {
                     output.push_str(item.content.trim());
                     output.push_str("\n\n");
@@ -84,7 +79,7 @@ fn append_deck_section(
             }
             "document" => {
                 let _ = writeln!(output, "### {}\n", item.title.trim());
-                let _ = writeln!(output, "`rag_get`: {}\n", item.reference);
+                let _ = writeln!(output, "`read_doc`: {}\n", item.reference);
                 if !item.content.is_empty() {
                     output.push_str(item.content.trim());
                     output.push_str("\n\n");
@@ -122,7 +117,7 @@ pub fn format_memory_recalls_markdown(cards: &[MemoryRecallHit]) -> String {
 #[must_use]
 pub fn format_memory_recall_markdown(hit: &MemoryRecallHit) -> String {
     let mut output = format!("## {}\n\n", hit.title.trim());
-    let _ = writeln!(output, "`memory_get`: {}", hit.id);
+    let _ = writeln!(output, "`read_memory`: {}", hit.id);
     if let Some(project_name) = &hit.project_name {
         let _ = writeln!(output, "repo: {project_name}");
     }
@@ -151,7 +146,7 @@ pub fn format_memory_recall_markdown(hit: &MemoryRecallHit) -> String {
 pub fn format_memory_full_markdown(hit: &MemorySearchHit) -> String {
     let card = &hit.card;
     let mut output = format!("# {}\n\n", card.title.trim());
-    let _ = writeln!(output, "`memory_get`: {}", card.id);
+    let _ = writeln!(output, "`read_memory`: {}", card.id);
     let _ = writeln!(output, "status: {:?}", card.status);
     if !hit.is_current_project {
         let _ = writeln!(output, "repo: {}", hit.project_name);
@@ -199,7 +194,7 @@ pub fn format_rag_hits_markdown(hits: &[RagSearchHit]) -> String {
     let mut output = String::from("# Documentation search (untrusted)\n\n");
     for hit in hits {
         let _ = writeln!(output, "## {}\n", hit.title_path.trim());
-        let _ = writeln!(output, "`rag_get`: {}", hit.id);
+        let _ = writeln!(output, "`read_doc`: {}", hit.id);
         let _ = writeln!(
             output,
             "{}:{}-{}",
@@ -218,7 +213,7 @@ pub fn format_rag_hits_markdown(hits: &[RagSearchHit]) -> String {
 #[must_use]
 pub fn format_document_chunk_markdown(chunk: &DocumentChunk) -> String {
     let mut output = format!("# {}\n\n", chunk.title_path.trim());
-    let _ = writeln!(output, "`rag_get`: {}", chunk.id);
+    let _ = writeln!(output, "`read_doc`: {}", chunk.id);
     let _ = writeln!(
         output,
         "{}:{}-{}",
@@ -250,6 +245,80 @@ pub fn format_observations_markdown(observations: &[TaskObservation]) -> String 
     output
 }
 
+/// Renders a governed change intent for agent follow-up.
+#[must_use]
+pub fn format_change_started_markdown(intent: &ChangeIntent) -> String {
+    let mut output = format!("# Change started\n\nchange_id: `{}`\n", intent.id);
+    let _ = writeln!(output, "title: {}\n", intent.title.trim());
+    if !intent.required_validations.is_empty() {
+        let _ = writeln!(
+            output,
+            "required_validations: {}",
+            intent.required_validations.join(", ")
+        );
+    }
+    if let Some(supersedes) = &intent.supersedes {
+        let _ = writeln!(output, "supersedes: `{supersedes}`");
+    }
+    output.push_str("\n");
+    output.push_str(intent.summary.trim());
+    output.push_str("\n");
+    output
+}
+
+/// Renders validation outcome for agent follow-up.
+#[must_use]
+pub fn format_validation_result_markdown(evidence: &ValidationEvidence) -> String {
+    let status = match evidence.status {
+        ValidationStatus::Passed => "passed",
+        ValidationStatus::Failed => "failed",
+        ValidationStatus::TimedOut => "timed_out",
+    };
+    let mut output = format!("# Validation {status}\n\n");
+    let _ = writeln!(output, "change_id: `{}`", evidence.change_id);
+    let _ = writeln!(output, "name: {}", evidence.name);
+    if let Some(command) = evidence.commands.first() {
+        let _ = writeln!(output, "command: {}", command.argv.join(" "));
+        if evidence.status == ValidationStatus::Failed && !command.stderr_excerpt.is_empty() {
+            let excerpt = command.stderr_excerpt.trim().replace('\n', " ");
+            let _ = writeln!(output, "stderr: {excerpt}");
+        }
+    }
+    output
+}
+
+/// Renders a promoted card in compact recall form.
+#[must_use]
+pub fn format_card_promoted_markdown(card: &Card) -> String {
+    let mut output = format!("# Memory promoted\n\ncard_id: `{}`\n", card.id);
+    let _ = writeln!(output, "title: {}\n", card.title.trim());
+    output.push_str(card.summary.trim());
+    output.push_str("\n");
+    output
+}
+
+/// Renders a terminal change failure.
+#[must_use]
+pub fn format_change_fail_markdown(change_id: &str, status: &str) -> String {
+    format!("# Change {status}\n\nchange_id: `{change_id}`\n")
+}
+
+/// Renders documentary index status.
+#[must_use]
+pub fn format_rag_status_markdown(
+    configured_sources: usize,
+    indexed_documents: usize,
+    indexed_chunks: usize,
+    codegraph_initialized: bool,
+) -> String {
+    let mut output = String::from("# Documentation index\n\n");
+    let _ = writeln!(output, "sources: {configured_sources}");
+    let _ = writeln!(output, "documents: {indexed_documents}");
+    let _ = writeln!(output, "chunks: {indexed_chunks}");
+    let _ = writeln!(output, "codegraph: {codegraph_initialized}");
+    output
+}
+
 /// Renders session context for coordination replay.
 #[must_use]
 pub fn format_session_context_markdown(
@@ -263,17 +332,21 @@ pub fn format_session_context_markdown(
     } else {
         let _ = writeln!(output, "session: `{}`", session.id);
     }
-    let _ = writeln!(output, "status: {:?}\n", session.status);
+    let _ = writeln!(
+        output,
+        "status: {}\n",
+        session_status_label(&session.status)
+    );
 
     if !tasks.is_empty() {
         output.push_str("## Tasks\n\n");
         for task in tasks {
             let _ = writeln!(
                 output,
-                "- **{}** (`{}`, {:?})",
+                "- {} (`{}`, {})",
                 task.title.trim(),
                 task.id,
-                task.status
+                task_status_label(&task.status)
             );
         }
         output.push('\n');
@@ -287,9 +360,9 @@ pub fn format_session_context_markdown(
             let summary = observation.summary.trim().replace('\n', " ");
             let _ = writeln!(
                 output,
-                "- **{}** [{:?}]: {summary}",
+                "- {} [{}]: {summary}",
                 observation.title.trim(),
-                observation.kind
+                observation_kind_label(&observation.kind)
             );
         }
         output.push('\n');
@@ -333,19 +406,40 @@ pub fn format_task_summary_markdown(task: &Task, observations: &[TaskObservation
     output
 }
 
+fn session_status_label(status: &SessionStatus) -> &'static str {
+    match status {
+        SessionStatus::Open => "open",
+        SessionStatus::Closed => "closed",
+    }
+}
+
+fn task_status_label(status: &TaskStatus) -> &'static str {
+    match status {
+        TaskStatus::Open => "open",
+        TaskStatus::Closed => "closed",
+    }
+}
+
+fn observation_kind_label(kind: &ObservationKind) -> &'static str {
+    match kind {
+        ObservationKind::Note => "note",
+        ObservationKind::Summary => "summary",
+        ObservationKind::Discovery => "discovery",
+        ObservationKind::Blocker => "blocker",
+        ObservationKind::Handoff => "handoff",
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use punchcard_core::{AgentDeck, AgentDeckItem, CardId, CardStatus, MemoryKind};
-    use std::path::Path;
+    use chrono::Utc;
+    use punchcard_core::{
+        AgentDeck, AgentDeckItem, CardId, CardStatus, ChangeId, ChangeIntent, MemoryKind, ProjectId,
+    };
 
-    use super::{format_agent_deck_markdown, format_memory_recall_markdown, wants_json_format};
-
-    #[test]
-    fn wants_json_format_matches_case_insensitively() {
-        assert!(wants_json_format("json"));
-        assert!(wants_json_format("JSON"));
-        assert!(!wants_json_format("markdown"));
-    }
+    use super::{
+        format_agent_deck_markdown, format_change_started_markdown, format_memory_recall_markdown,
+    };
 
     #[test]
     fn agent_deck_markdown_includes_follow_up_refs() {
@@ -371,13 +465,35 @@ mod tests {
 
         let markdown = format_agent_deck_markdown(&deck);
         assert!(markdown.contains("## Warnings"));
-        assert!(markdown.contains("`memory_get`: card-1"));
+        assert!(markdown.contains("`read_memory`: card-1"));
         assert!(markdown.contains("- `src/db/init.rs`"));
         assert!(!markdown.contains("\"category\""));
     }
 
     #[test]
+    fn change_started_markdown_is_single_block() {
+        let intent = ChangeIntent {
+            id: ChangeId::new(),
+            project_id: ProjectId::from_persisted("proj".to_owned()),
+            kind: punchcard_core::CardKind::Implementation,
+            memory_kind: MemoryKind::Implementation,
+            title: "Fix startup errors".to_owned(),
+            summary: "What: single-line reporting.".to_owned(),
+            status: CardStatus::InProgress,
+            required_validations: vec!["check".to_owned()],
+            supersedes: None,
+            created_at: Utc::now(),
+        };
+        let markdown = format_change_started_markdown(&intent);
+        assert!(markdown.contains("change_id:"));
+        assert!(markdown.contains("required_validations: check"));
+        assert!(!markdown.contains("project_root"));
+    }
+
+    #[test]
     fn memory_recall_markdown_flags_stale_files() {
+        use std::path::Path;
+
         let hit = punchcard_core::MemoryRecallHit {
             id: CardId::from_persisted("card-1".to_owned()),
             title: "Route".to_owned(),

@@ -9,21 +9,28 @@
   (multilingual-e5-small).
 - Added MCP stdio tools, Cursor and Codex plugins, plugin
   status/upgrade/disable/uninstall workflows, and diagnostics.
+- Renamed agent-facing MCP tools to clear action names such as `get_context`,
+  `search_memory`, `read_doc`, `run_validation`, and `save_memory`, with
+  markdown-only responses for compact LLM consumption.
 - Added canonical agent-asset generation and consistency checks so Cursor and
   Codex rules, skills, commands, hooks, and manifests have one editable source
   under `crates/punchcard-rules/assets`.
+- Moved the Codex plugin source bundle to `plugins/codex`; installation still
+  registers the plugin as `punchcard@punchcard`.
+- Added the `punchcard-rag/vendored-protoc` default feature, allowing developer
+  builds with system `protoc` via `--no-default-features`.
 - Added human-readable MCP tool titles, safety annotations, and validated
   change/card titles in state-changing approval requests.
 - Added an ephemeral working-memory layer of sessions, tasks, and observations
-  (`session_*` / `task_*` tools) that seeds `context_prepare` and lets subagents
+  (`session_*` / `task_*` tools) that seeds `get_context` and lets subagents
   read a parent task's notes, kept separate from validation-gated governed memory.
-- Added governed forget and review (`memory_forget`, `memory_review`) with
+- Added governed forget and review (`forget_memory`, `review_memory`) with
   dry-run previews and append-only invalidation instead of silent deletion.
 - Added a shared workspace database: sibling repositories can point at one
   `state_db` while each keeps its own `ProjectId`; cross-repo recall via
-  `memory search --workspace` (CLI) and `memory_search(include_workspace)` (MCP),
-  a `projects` registry, and the `memory_projects` listing.
-- Added workspace pointers to `context_prepare`: a bounded, reserved-budget
+  `memory search --workspace` (CLI) and `search_memory(include_workspace)` (MCP),
+  a `projects` registry, and the `list_memory_projects` listing.
+- Added workspace pointers to `get_context`: a bounded, reserved-budget
   `workspace` deck section that surfaces task-relevant sibling repositories as
   leads without injecting their content, configurable under `[memory.workspace]`.
 - Added checksummed JSONL event export/import, local statistics, and fixtures.

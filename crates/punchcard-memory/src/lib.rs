@@ -16,10 +16,11 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub use agent_format::{
-    format_agent_deck_markdown, format_document_chunk_markdown, format_memory_full_markdown,
+    format_agent_deck_markdown, format_card_promoted_markdown, format_change_fail_markdown,
+    format_change_started_markdown, format_document_chunk_markdown, format_memory_full_markdown,
     format_memory_recall_markdown, format_memory_recalls_markdown, format_observations_markdown,
-    format_rag_hits_markdown, format_session_context_markdown, format_task_summary_markdown,
-    wants_json_format,
+    format_rag_hits_markdown, format_rag_status_markdown, format_session_context_markdown,
+    format_task_summary_markdown, format_validation_result_markdown,
 };
 
 /// Inputs for building the cross-repository workspace section of a context deck.
@@ -44,7 +45,7 @@ const WORKSPACE_TITLES_PER_REPO: usize = 2;
 /// Builds compact, budgeted pointers to sibling repositories for a context deck.
 ///
 /// The result never contains another repository's full card content: each pointer is a
-/// short lead the agent can follow with `memory_search --workspace`. A sibling is included
+/// short lead the agent can follow with `search_memory --workspace`. A sibling is included
 /// only when it has task-relevant governed memory or is referenced in the current
 /// repository's documentation. When siblings exist but none are relevant, a single terse
 /// map line records their existence and location. Returns an empty vector when there are no
@@ -145,7 +146,7 @@ fn pointer_reason(matched: bool, referenced: bool) -> String {
         _ => "sibling repo referenced in this repo's docs",
     };
     format!(
-        "{lead}; retrieve with memory_search --workspace before relying on it (do not promote across repos)"
+        "{lead}; retrieve with search_memory --workspace before relying on it (do not promote across repos)"
     )
 }
 
@@ -174,7 +175,7 @@ fn workspace_map_item(siblings: &[&ProjectRecord], budget_tokens: usize) -> Opti
         .collect::<Vec<_>>()
         .join(", ");
     let content = format!(
-        "Shared workspace DB also holds memory for sibling repos: {listed}. None matched this task; use memory_search --workspace only if the task spans them."
+        "Shared workspace DB also holds memory for sibling repos: {listed}. None matched this task; use search_memory --workspace only if the task spans them."
     );
     let tokens = estimate_pointer_tokens(&content);
     if tokens > budget_tokens {
@@ -292,7 +293,7 @@ pub const fn failure_state(interrupted: bool) -> CardStatus {
 
 /// Compares associated file hashes without mutating the card automatically.
 #[must_use]
-pub fn memory_search_hit(
+pub fn governed_memory_hit(
     card: Card,
     current_project_id: &ProjectId,
     project_name: String,
@@ -325,7 +326,7 @@ pub fn memory_search_hit(
 
 /// Builds a search hit using registered project metadata when available.
 #[must_use]
-pub fn memory_search_hit_for_card(
+pub fn governed_memory_hit_for_card(
     card: Card,
     current_project_id: &ProjectId,
     current_root: &std::path::Path,
@@ -339,7 +340,7 @@ pub fn memory_search_hit_for_card(
         current_name,
         project_lookup,
     );
-    memory_search_hit(card, current_project_id, project_name, &project_root)
+    governed_memory_hit(card, current_project_id, project_name, &project_root)
 }
 
 /// Projects a full search hit into the compact recall shape for agent retrieval.
@@ -385,7 +386,7 @@ fn resolve_card_project(
 /// Compares associated file hashes for the current repository session.
 #[must_use]
 pub fn check_freshness(card: Card, project_root: &std::path::Path) -> MemorySearchHit {
-    memory_search_hit(
+    governed_memory_hit(
         card,
         &ProjectId::from_persisted(String::new()),
         String::new(),
@@ -404,12 +405,12 @@ pub enum TransitionError {
     NoRequiredValidations,
     /// Required evidence was not recorded.
     #[error(
-        "required validations not recorded for this change: {0}. Record each with MCP `validation_run` (matching `name`) or `punchcard validate <name> --change-id <id>`. Direct cargo or shell commands do not attach governed evidence"
+        "required validations not recorded for this change: {0}. Record each with MCP `run_validation` (matching `name`) or `punchcard validate <name> --change-id <id>`. Direct cargo or shell commands do not attach governed evidence"
     )]
     MissingValidations(String),
     /// Required evidence did not pass.
     #[error(
-        "required validation `{name}` is {status:?}, expected passed; rerun MCP `validation_run` with name `{name}` or `punchcard validate {name} --change-id <id>` on the same tree after fixing failures"
+        "required validation `{name}` is {status:?}, expected passed; rerun MCP `run_validation` with name `{name}` or `punchcard validate {name} --change-id <id>` on the same tree after fixing failures"
     )]
     ValidationNotPassed {
         /// Validation name.
@@ -746,7 +747,7 @@ mod tests {
             }],
         };
 
-        let result = super::memory_search_hit(
+        let result = super::governed_memory_hit(
             card,
             &intent.project_id,
             "fixture".to_owned(),
@@ -785,7 +786,7 @@ mod tests {
             }],
         };
 
-        let hit = super::memory_search_hit_for_card(
+        let hit = super::governed_memory_hit_for_card(
             card,
             &session_id,
             session.path(),
@@ -807,7 +808,7 @@ mod tests {
     #[test]
     fn recall_hit_keeps_knowledge_fields_and_drops_audit_metadata() {
         let temporary = tempfile::tempdir().expect("temporary directory should exist");
-        let hit = super::memory_search_hit(
+        let hit = super::governed_memory_hit(
             Card {
                 id: CardId::new(),
                 project_id: ProjectId::from_persisted("p".to_owned()),

@@ -158,23 +158,23 @@ pub fn render_delivery_assets() -> Vec<AgentAsset> {
             content: render_memory_skill(),
         },
         AgentAsset {
-            path: "plugins/punchcard/.codex-plugin/plugin.json",
+            path: "plugins/codex/.codex-plugin/plugin.json",
             content: render_codex_plugin_manifest(),
         },
         AgentAsset {
-            path: "plugins/punchcard/.mcp.json",
+            path: "plugins/codex/.mcp.json",
             content: render_codex_mcp_manifest(),
         },
         AgentAsset {
-            path: "plugins/punchcard/hooks/hooks.json",
+            path: "plugins/codex/hooks/hooks.json",
             content: render_empty_hooks_manifest(),
         },
         AgentAsset {
-            path: "plugins/punchcard/skills/punchcard-context/SKILL.md",
+            path: "plugins/codex/skills/punchcard-context/SKILL.md",
             content: render_context_skill(),
         },
         AgentAsset {
-            path: "plugins/punchcard/skills/punchcard-memory/SKILL.md",
+            path: "plugins/codex/skills/punchcard-memory/SKILL.md",
             content: render_memory_skill(),
         },
     ]
@@ -239,9 +239,9 @@ mod tests {
     #[test]
     fn cursor_rule_includes_mcp_workflow_order() {
         let cursor = render_cursor_rule();
-        assert!(cursor.contains("context_prepare"));
-        assert!(cursor.contains("change_promote"));
-        assert!(cursor.contains("memory_search"));
+        assert!(cursor.contains("get_context"));
+        assert!(cursor.contains("save_memory"));
+        assert!(cursor.contains("search_memory"));
     }
 
     #[test]
@@ -336,7 +336,7 @@ mod tests {
         assert!(instructions.contains("refactor"));
         assert!(instructions.contains("debug"));
         assert!(instructions.contains("Subagent"));
-        assert!(instructions.contains("Source-only"));
+        assert!(instructions.contains("Direct edit"));
         assert!(instructions.contains("## Classify"));
     }
 
@@ -350,12 +350,12 @@ mod tests {
         assert!(instructions.contains("Enriched"));
         assert!(instructions.contains("Focused"));
         assert!(!instructions.contains("## Trivial vs Scoped"));
-        assert!(instructions.contains("context_prepare"));
+        assert!(instructions.contains("get_context"));
         assert!(cursor.contains("before") && cursor.contains("Read/Grep"));
         assert!(cursor.contains("Enriched"));
         assert!(cursor.contains("Focused"));
         assert!(context.contains("Tier gate"));
-        assert!(context.contains("Do not"));
+        assert!(context.contains("repo-wide"));
         assert!(memory.contains("deck ref"));
     }
 
@@ -364,7 +364,7 @@ mod tests {
         let instructions = render_punchcard_instructions();
         assert!(instructions.contains("Project setup"));
         assert!(instructions.contains("punchcard init"));
-        assert!(instructions.contains("context_prepare"));
-        assert!(instructions.contains("change_begin"));
+        assert!(instructions.contains("get_context"));
+        assert!(instructions.contains("start_change"));
     }
 }

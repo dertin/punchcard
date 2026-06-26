@@ -39,5 +39,19 @@ punchcard init
 
 See [Configuration](configuration.md) for every `.punchcard/config.toml` option.
 
-`protoc` is not listed here because the workspace uses vendored build-time
-support for the Lance crates.
+`protoc` is not required by default because `punchcard-rag` enables
+`vendored-protoc`, which lets Lance build with vendored protobuf tooling. This
+is portable but slower on clean build directories because `protobuf-src`
+compiles `protoc`.
+
+For faster local builds, install the system compiler and disable the vendored
+feature:
+
+```bash
+sudo apt-get install protobuf-compiler
+cargo build -p punchcard-rag --no-default-features
+cargo build -p punchcard --no-default-features
+```
+
+This changes only build-time protobuf generation for Lance; it does not change
+Punchcard runtime retrieval behavior or embedding performance.

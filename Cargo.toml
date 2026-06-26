@@ -32,8 +32,8 @@ futures = "0.3.31"
 hex = "0.4.3"
 ignore = "0.4.26"
 lancedb = "0.30.0"
-lance = { version = "7.0.0", default-features = false, features = ["protoc"] }
-lance-datafusion = { version = "7.0.0", default-features = false, features = ["protoc"] }
+lance = { version = "7.0.0", default-features = false }
+lance-datafusion = { version = "7.0.0", default-features = false }
 rmcp = { version = "1.7.0", features = ["client", "server", "transport-io"] }
 rusqlite = { version = "0.40.1", features = ["bundled-full", "chrono", "serde_json"] }
 schemars = { version = "1.2.1", features = ["chrono04", "uuid1"] }

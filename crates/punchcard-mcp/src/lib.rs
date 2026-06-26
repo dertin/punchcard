@@ -8,17 +8,19 @@ use punchcard_core::{
     Actor, Card, CardId, CardKind, CardStatus, ChangeId, ChangeIntent, Deck, DeckId, DeckItem,
     MemoryKind, MemoryRecallHit, MemoryReviewAction, MemorySearchHit, ObservationKind,
     ProjectConfig, ProjectId, ProjectRecord, RagSearchHit, Session, SessionId, Task, TaskId,
-    TaskObservation, ValidationEvidence,
+    TaskObservation,
 };
 use punchcard_integrations::{
     find_git_root, fingerprint_project_files, load_config, resolve_state_db_path, run_validation,
 };
 use punchcard_memory::{
-    WorkspacePointerInput, format_agent_deck_markdown, format_document_chunk_markdown,
+    WorkspacePointerInput, format_agent_deck_markdown, format_card_promoted_markdown,
+    format_change_fail_markdown, format_change_started_markdown, format_document_chunk_markdown,
     format_memory_full_markdown, format_memory_recall_markdown, format_memory_recalls_markdown,
-    format_observations_markdown, format_rag_hits_markdown, format_session_context_markdown,
-    format_task_summary_markdown, memory_recall_hit, memory_search_hit_for_card, prepare_promotion,
-    wants_json_format, workspace_pointers,
+    format_observations_markdown, format_rag_hits_markdown, format_rag_status_markdown,
+    format_session_context_markdown, format_task_summary_markdown,
+    format_validation_result_markdown, governed_memory_hit_for_card, memory_recall_hit,
+    prepare_promotion, workspace_pointers,
 };
 use punchcard_store::{GovernedForgetRequest, Store};
 use rmcp::{
@@ -74,11 +76,11 @@ struct Project {
     store: Store,
 }
 
-fn memory_search_hit(project: &Project, session_root: &Path, card: Card) -> MemorySearchHit {
+fn governed_memory_hit(project: &Project, session_root: &Path, card: Card) -> MemorySearchHit {
     let current_name = project.config.project.name.clone();
     let store = &project.store;
     let current_id = project.id.clone();
-    memory_search_hit_for_card(
+    governed_memory_hit_for_card(
         card,
         &current_id,
         session_root,
@@ -123,18 +125,12 @@ struct SearchInput {
     /// Search every project registered in a shared `state_db`.
     #[serde(default)]
     include_workspace: bool,
-    /// `markdown` (default) for agent-readable text or `json` for structured output.
-    #[serde(default = "default_retrieval_format")]
-    format: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct IdInput {
     /// Stable card, chunk, or change identifier.
     id: String,
-    /// `markdown` (default) for agent-readable text or `json` for structured output.
-    #[serde(default = "default_retrieval_format")]
-    format: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -143,19 +139,6 @@ struct MemoryGetInput {
     id: String,
     /// Set to `full` for evidence refs, associated file hashes, and timestamps.
     detail: Option<String>,
-    /// `markdown` (default) for agent-readable text or `json` for structured output.
-    #[serde(default = "default_retrieval_format")]
-    format: String,
-}
-
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-struct MemoryGetOutput {
-    /// Compact recall fields for routine use.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recall: Option<MemoryRecallHit>,
-    /// Full card and freshness envelope when `detail=full`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    full: Option<MemorySearchHit>,
 }
 
 fn wants_full_detail(detail: Option<&str>) -> bool {
@@ -165,20 +148,16 @@ fn wants_full_detail(detail: Option<&str>) -> bool {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct ContextPrepareInput {
     /// Concrete programming task.
-    #[serde(alias = "query")]
     task: String,
     /// Explicit approximate token budget.
     budget: Option<usize>,
     /// Optional paths or symbols already known by the caller.
-    #[serde(default, alias = "paths")]
+    #[serde(default)]
     hints: Vec<String>,
     /// Optional session to bias the deck toward recent working observations.
     session_id: Option<String>,
     /// Optional task whose subtree observations seed the deck first.
     task_id: Option<String>,
-    /// `markdown` (default) for agent-readable text or `json` for structured output.
-    #[serde(default = "default_retrieval_format")]
-    format: String,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -216,26 +195,6 @@ struct ChangePromoteInput {
     /// Repository-relative files associated with the validated behavior.
     #[serde(default)]
     files: Vec<PathBuf>,
-}
-
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-struct ChangeBeginOutput {
-    /// Registered project name from configuration.
-    project_name: String,
-    /// Git repository root used by this MCP server.
-    project_root: PathBuf,
-    #[serde(flatten)]
-    change: ChangeIntent,
-}
-
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-struct ValidationRunOutput {
-    /// Registered project name from configuration.
-    project_name: String,
-    /// Git repository root where the validation command ran.
-    project_root: PathBuf,
-    #[serde(flatten)]
-    evidence: ValidationEvidence,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -306,23 +265,6 @@ struct MemoryForgetOutput {
 struct TaskSummaryInput {
     /// Task to summarize.
     task_id: String,
-    /// `markdown` (default) for agent-readable text or `json` for structured output.
-    #[serde(default = "default_retrieval_format", alias = "text")]
-    format: String,
-}
-
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-struct RagStatusOutput {
-    /// Number of configured sources.
-    configured_sources: usize,
-    /// Number of indexed documents.
-    indexed_documents: usize,
-    /// Number of indexed chunks.
-    indexed_chunks: usize,
-    /// Configured embedding model.
-    embedding_model: String,
-    /// Whether an independently managed `CodeGraph` index exists.
-    codegraph_initialized: bool,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -335,14 +277,6 @@ struct RagSearchOutput {
 struct MemorySearchOutput {
     /// Matching governed cards in compact recall form.
     cards: Vec<MemoryRecallHit>,
-}
-
-#[derive(Debug, Serialize, schemars::JsonSchema)]
-struct ChangeFailOutput {
-    /// Updated change identity.
-    change_id: ChangeId,
-    /// Terminal failed or incomplete state.
-    status: CardStatus,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -385,9 +319,6 @@ struct SessionContextInput {
     session_id: Option<String>,
     /// Optional maximum observation count.
     limit: Option<usize>,
-    /// `markdown` (default) for agent-readable text or `json` for structured output.
-    #[serde(default = "default_retrieval_format")]
-    format: String,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -442,9 +373,6 @@ struct TaskNoteSearchInput {
     include_ancestors: bool,
     /// Optional maximum result count.
     limit: Option<usize>,
-    /// `markdown` (default) for agent-readable text or `json` for structured output.
-    #[serde(default = "default_retrieval_format")]
-    format: String,
 }
 
 #[derive(Debug, Serialize, schemars::JsonSchema)]
@@ -486,21 +414,21 @@ fn verify_approval_title(kind: &str, stored: &str, supplied: &str) -> Result<(),
 
 #[tool_router]
 impl PunchcardServer {
-    /// Read project memory and documentation to prepare a bounded evidence deck. This does not modify repository or memory state.
+    /// Get bounded task context from project memory, documentation, observations, and caller hints. This does not modify state.
     ///
     /// Example: `{"task": "add retry to Atenea client", "hints": ["src/atenea/"]}`.
     /// Use `task` and optional `hints` (search tools use `query`).
     #[tool(
-        name = "context_prepare",
+        name = "get_context",
         annotations(
-            title = "Prepare project evidence",
+            title = "Get task context",
             read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = true,
             open_world_hint = false
         )
     )]
-    async fn context_prepare(
+    async fn get_context(
         &self,
         Parameters(input): Parameters<ContextPrepareInput>,
     ) -> Result<CallToolResult, String> {
@@ -669,20 +597,14 @@ impl PunchcardServer {
             warnings,
         };
         let bytes = serde_json::to_vec(&deck).map_or(0, |value| value.len());
-        record_tool(
-            &project,
-            "context_prepare",
-            started,
-            deck.items.len(),
-            bytes,
-        );
+        record_tool(&project, "get_context", started, deck.items.len(), bytes);
         let agent = deck.for_agent();
-        retrieval_response(&input.format, format_agent_deck_markdown(&agent), agent)
+        markdown_response(format_agent_deck_markdown(&agent))
     }
 
-    /// Search the local indexed project documentation and return compact citations. This does not modify state.
+    /// Search indexed project documentation and return compact citations. This does not modify state.
     #[tool(
-        name = "rag_search",
+        name = "search_docs",
         annotations(
             title = "Search project documentation",
             read_only_hint = true,
@@ -691,7 +613,7 @@ impl PunchcardServer {
             open_world_hint = false
         )
     )]
-    async fn rag_search(
+    async fn search_docs(
         &self,
         Parameters(input): Parameters<SearchInput>,
     ) -> Result<CallToolResult, String> {
@@ -715,26 +637,28 @@ impl PunchcardServer {
         .map_err(|error| error.to_string())?;
         let output = RagSearchOutput { results: hits };
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
-        record_tool(&project, "rag_search", started, output.results.len(), bytes);
-        retrieval_response(
-            &input.format,
-            format_rag_hits_markdown(&output.results),
-            output,
-        )
+        record_tool(
+            &project,
+            "search_docs",
+            started,
+            output.results.len(),
+            bytes,
+        );
+        markdown_response(format_rag_hits_markdown(&output.results))
     }
 
-    /// Read one previously indexed documentary chunk by ID. This does not modify state.
+    /// Read one previously indexed documentation chunk by ID. This does not modify state.
     #[tool(
-        name = "rag_get",
+        name = "read_doc",
         annotations(
-            title = "Read project document evidence",
+            title = "Read project documentation",
             read_only_hint = true,
             destructive_hint = false,
             idempotent_hint = true,
             open_world_hint = false
         )
     )]
-    async fn rag_get(
+    async fn read_doc(
         &self,
         Parameters(input): Parameters<IdInput>,
     ) -> Result<CallToolResult, String> {
@@ -744,13 +668,13 @@ impl PunchcardServer {
             .store
             .get_document_chunk(&input.id)
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "rag_get", started, 1, chunk.content.len());
-        retrieval_response(&input.format, format_document_chunk_markdown(&chunk), chunk)
+        record_tool(&project, "read_doc", started, 1, chunk.content.len());
+        markdown_response(format_document_chunk_markdown(&chunk))
     }
 
     /// Read local documentary index status without downloading models or modifying state.
     #[tool(
-        name = "rag_status",
+        name = "check_docs_index",
         annotations(
             title = "Check documentation index",
             read_only_hint = true,
@@ -759,7 +683,7 @@ impl PunchcardServer {
             open_world_hint = false
         )
     )]
-    async fn rag_status(&self) -> Result<Json<RagStatusOutput>, String> {
+    async fn check_docs_index(&self) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let indexed_documents = project
@@ -786,21 +710,21 @@ impl PunchcardServer {
             .and_then(|value| {
                 usize::try_from(value).map_err(|error| format!("invalid chunk count: {error}"))
             })?;
-        let output = RagStatusOutput {
-            configured_sources: project.config.rag.sources.len(),
+        let configured_sources = project.config.rag.sources.len();
+        let codegraph_initialized =
+            project.config.codegraph.enabled && self.root.join(".codegraph").exists();
+        record_tool(&project, "check_docs_index", started, indexed_chunks, 0);
+        markdown_response(format_rag_status_markdown(
+            configured_sources,
             indexed_documents,
             indexed_chunks,
-            embedding_model: project.config.rag.embedding_model.clone(),
-            codegraph_initialized: project.config.codegraph.enabled
-                && self.root.join(".codegraph").exists(),
-        };
-        record_tool(&project, "rag_status", started, indexed_chunks, 0);
-        Ok(Json(output))
+            codegraph_initialized,
+        ))
     }
 
-    /// Search active governed project memory. Returns compact recall hits; use `memory_get` with `detail=full` for evidence refs and file hashes.
+    /// Search active governed project memory. Returns compact recall hits; use `read_memory` with `detail=full` for evidence refs and file hashes.
     #[tool(
-        name = "memory_search",
+        name = "search_memory",
         annotations(
             title = "Search validated project memory",
             read_only_hint = true,
@@ -809,7 +733,7 @@ impl PunchcardServer {
             open_world_hint = false
         )
     )]
-    async fn memory_search(
+    async fn search_memory(
         &self,
         Parameters(input): Parameters<SearchInput>,
     ) -> Result<CallToolResult, String> {
@@ -838,28 +762,24 @@ impl PunchcardServer {
         let output = MemorySearchOutput {
             cards: cards
                 .into_iter()
-                .map(|card| memory_search_hit(&project, &self.root, card))
+                .map(|card| governed_memory_hit(&project, &self.root, card))
                 .map(|hit| memory_recall_hit(&hit))
                 .collect(),
         };
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
         record_tool(
             &project,
-            "memory_search",
+            "search_memory",
             started,
             output.cards.len(),
             bytes,
         );
-        retrieval_response(
-            &input.format,
-            format_memory_recalls_markdown(&output.cards),
-            output,
-        )
+        markdown_response(format_memory_recalls_markdown(&output.cards))
     }
 
     /// Read one governed memory card. Default: compact recall (`id`, `title`, `summary`, freshness). Set `detail=full` for evidence refs and file hashes.
     #[tool(
-        name = "memory_get",
+        name = "read_memory",
         annotations(
             title = "Read validated project memory",
             read_only_hint = true,
@@ -868,7 +788,7 @@ impl PunchcardServer {
             open_world_hint = false
         )
     )]
-    async fn memory_get(
+    async fn read_memory(
         &self,
         Parameters(input): Parameters<MemoryGetInput>,
     ) -> Result<CallToolResult, String> {
@@ -879,32 +799,20 @@ impl PunchcardServer {
             .store
             .get_card(&id)
             .map_err(|error| error.to_string())?;
-        let hit = memory_search_hit(&project, &self.root, card);
+        let hit = governed_memory_hit(&project, &self.root, card);
         let bytes = serde_json::to_vec(&hit).map_or(0, |value| value.len());
-        record_tool(&project, "memory_get", started, 1, bytes);
+        record_tool(&project, "read_memory", started, 1, bytes);
         if wants_full_detail(input.detail.as_deref()) {
-            let response = MemoryGetOutput {
-                recall: None,
-                full: Some(hit.clone()),
-            };
-            retrieval_response(&input.format, format_memory_full_markdown(&hit), response)
+            markdown_response(format_memory_full_markdown(&hit))
         } else {
             let recall = memory_recall_hit(&hit);
-            let response = MemoryGetOutput {
-                recall: Some(recall.clone()),
-                full: None,
-            };
-            retrieval_response(
-                &input.format,
-                format_memory_recall_markdown(&recall),
-                response,
-            )
+            markdown_response(format_memory_recall_markdown(&recall))
         }
     }
 
     /// Create an append-only draft change record. This does not activate or replace current project memory.
     #[tool(
-        name = "change_begin",
+        name = "start_change",
         annotations(
             title = "Start governed change record",
             read_only_hint = false,
@@ -913,10 +821,10 @@ impl PunchcardServer {
             open_world_hint = false
         )
     )]
-    async fn change_begin(
+    async fn start_change(
         &self,
         Parameters(input): Parameters<ChangeBeginInput>,
-    ) -> Result<Json<ChangeBeginOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let intent = ChangeIntent {
@@ -939,20 +847,16 @@ impl PunchcardServer {
             .store
             .create_change(&intent, Actor::Codex)
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "change_begin", started, 1, 0);
-        Ok(Json(ChangeBeginOutput {
-            project_name: project.config.project.name.clone(),
-            project_root: self.root.clone(),
-            change: intent,
-        }))
+        record_tool(&project, "start_change", started, 1, 0);
+        markdown_response(format_change_started_markdown(&intent))
     }
 
     /// Execute one project-allowlisted validation command and attach its evidence to the named change.
     ///
-    /// Call once per required name from `.punchcard/config.toml` before `change_promote`.
+    /// Call once per required name from `.punchcard/config.toml` before `save_memory`.
     /// Running `cargo fmt`, `cargo test`, or similar shells directly does not record evidence.
     #[tool(
-        name = "validation_run",
+        name = "run_validation",
         annotations(
             title = "Run approved project validation",
             read_only_hint = false,
@@ -961,10 +865,10 @@ impl PunchcardServer {
             open_world_hint = false
         )
     )]
-    async fn validation_run(
+    async fn run_project_validation(
         &self,
         Parameters(input): Parameters<ValidationRunInput>,
-    ) -> Result<Json<ValidationRunOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let change_id = ChangeId::parse(input.change_id).map_err(|error| error.to_string())?;
@@ -987,17 +891,13 @@ impl PunchcardServer {
             .record_validation(&project.id, &evidence)
             .map_err(|error| error.to_string())?;
         let bytes = serde_json::to_vec(&evidence).map_or(0, |value| value.len());
-        record_tool(&project, "validation_run", started, 1, bytes);
-        Ok(Json(ValidationRunOutput {
-            project_name: project.config.project.name.clone(),
-            project_root: self.root.clone(),
-            evidence,
-        }))
+        record_tool(&project, "run_validation", started, 1, bytes);
+        markdown_response(format_validation_result_markdown(&evidence))
     }
 
     /// Append a failed or interrupted result to the named change while preserving current active memory.
     #[tool(
-        name = "change_fail",
+        name = "record_change_failure",
         annotations(
             title = "Record failed or interrupted work",
             read_only_hint = false,
@@ -1009,7 +909,7 @@ impl PunchcardServer {
     async fn change_fail(
         &self,
         Parameters(input): Parameters<ChangeFailInput>,
-    ) -> Result<Json<ChangeFailOutput>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let change_id = ChangeId::parse(input.change_id).map_err(|error| error.to_string())?;
@@ -1018,18 +918,25 @@ impl PunchcardServer {
             .get_change(&change_id)
             .map_err(|error| error.to_string())?;
         verify_approval_title("change", &intent.title, &input.change_title)?;
-        let status = project
+        let _status = project
             .store
             .fail_change(&change_id, input.interrupted, &input.summary, Actor::Codex)
             .map_err(|error| error.to_string())?;
-        let output = ChangeFailOutput { change_id, status };
-        record_tool(&project, "change_fail", started, 1, 0);
-        Ok(Json(output))
+        let status_label = if input.interrupted {
+            "incomplete"
+        } else {
+            "failed"
+        };
+        record_tool(&project, "record_change_failure", started, 1, 0);
+        markdown_response(format_change_fail_markdown(
+            &change_id.to_string(),
+            status_label,
+        ))
     }
 
     /// Confirm, mark stale, or invalidate the named memory card with an append-only review event.
     #[tool(
-        name = "memory_review",
+        name = "review_memory",
         annotations(
             title = "Review current project memory",
             read_only_hint = false,
@@ -1064,13 +971,13 @@ impl PunchcardServer {
             .store
             .review_card(&card_id, action, &input.note, Actor::Codex)
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "memory_review", started, 1, 0);
+        record_tool(&project, "review_memory", started, 1, 0);
         Ok(Json(card))
     }
 
     /// Preview or invalidate active/stale cards through governed transitions.
     #[tool(
-        name = "memory_forget",
+        name = "forget_memory",
         annotations(
             title = "Forget validated project memory",
             read_only_hint = false,
@@ -1086,7 +993,7 @@ impl PunchcardServer {
         let started = Instant::now();
         let project = self.project()?;
         if input.card_id.is_none() && input.query.is_none() {
-            return Err("memory_forget requires card_id or query".to_owned());
+            return Err("forget_memory requires card_id or query".to_owned());
         }
         let card_id = input
             .card_id
@@ -1139,7 +1046,7 @@ impl PunchcardServer {
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
         record_tool(
             &project,
-            "memory_forget",
+            "forget_memory",
             started,
             output.candidates.len(),
             bytes,
@@ -1147,16 +1054,16 @@ impl PunchcardServer {
         Ok(Json(output))
     }
 
-    /// Activate the named validated change as current governed memory, associate the listed files, and supersede its prior active card when configured.
+    /// Save the named validated change as current governed memory, associate the listed files, and supersede its prior active card when configured.
     ///
-    /// Requires every required validation to be recorded on this change via `validation_run`
+    /// Requires every required validation to be recorded on this change via `run_validation`
     /// (or `punchcard validate`) on the same working tree. Direct cargo commands do not count.
     ///
     /// Example without files: `{"change_id": "...", "change_title": "..."}`.
-    /// Optional `files` must exist on disk, repo-relative to `project_root` from `change_begin`
-    /// or `validation_run`; omit when unsure.
+    /// Optional `files` must exist on disk, repo-relative to `project_root` from `start_change`
+    /// or `run_validation`; omit when unsure.
     #[tool(
-        name = "change_promote",
+        name = "save_memory",
         annotations(
             title = "Activate validated project memory",
             read_only_hint = false,
@@ -1165,10 +1072,10 @@ impl PunchcardServer {
             open_world_hint = false
         )
     )]
-    async fn change_promote(
+    async fn save_memory(
         &self,
         Parameters(input): Parameters<ChangePromoteInput>,
-    ) -> Result<Json<Card>, String> {
+    ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
         let change_id = ChangeId::parse(input.change_id).map_err(|error| error.to_string())?;
@@ -1193,13 +1100,13 @@ impl PunchcardServer {
             .store
             .promote_card(&change_id, &card, Actor::Codex)
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "change_promote", started, 1, 0);
-        Ok(Json(card))
+        record_tool(&project, "save_memory", started, 1, 0);
+        markdown_response(format_card_promoted_markdown(&card))
     }
 
     /// List governed cards by status, newest first. This does not modify state.
     #[tool(
-        name = "memory_list",
+        name = "list_memory",
         annotations(
             title = "List validated project memory",
             read_only_hint = true,
@@ -1224,13 +1131,13 @@ impl PunchcardServer {
             .map_err(|error| error.to_string())?;
         let output = MemoryListOutput { cards };
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
-        record_tool(&project, "memory_list", started, output.cards.len(), bytes);
+        record_tool(&project, "list_memory", started, output.cards.len(), bytes);
         Ok(Json(output))
     }
 
     /// List every project registered in the shared database with its repository root.
     #[tool(
-        name = "memory_projects",
+        name = "list_memory_projects",
         annotations(
             title = "List workspace memory projects",
             read_only_hint = true,
@@ -1253,7 +1160,7 @@ impl PunchcardServer {
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
         record_tool(
             &project,
-            "memory_projects",
+            "list_memory_projects",
             started,
             output.projects.len(),
             bytes,
@@ -1263,7 +1170,7 @@ impl PunchcardServer {
 
     /// Open an ephemeral working session for this codebase. Session/task data is never trusted current knowledge.
     #[tool(
-        name = "session_start",
+        name = "start_session",
         annotations(
             title = "Start a working session",
             read_only_hint = false,
@@ -1282,13 +1189,13 @@ impl PunchcardServer {
             .store
             .session_start(&project.id, input.title)
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "session_start", started, 1, 0);
+        record_tool(&project, "start_session", started, 1, 0);
         Ok(Json(session))
     }
 
     /// Close an open working session. Observations remain searchable until pruned.
     #[tool(
-        name = "session_end",
+        name = "end_session",
         annotations(
             title = "Close a working session",
             read_only_hint = false,
@@ -1308,13 +1215,13 @@ impl PunchcardServer {
             .store
             .session_end(&session_id)
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "session_end", started, 1, 0);
+        record_tool(&project, "end_session", started, 1, 0);
         Ok(Json(session))
     }
 
     /// Recover a session's tasks and recent working observations. This does not modify state.
     #[tool(
-        name = "session_context",
+        name = "get_session_context",
         annotations(
             title = "Recover session working memory",
             read_only_hint = true,
@@ -1355,25 +1262,21 @@ impl PunchcardServer {
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
         record_tool(
             &project,
-            "session_context",
+            "get_session_context",
             started,
             output.recent_observations.len(),
             bytes,
         );
-        retrieval_response(
-            &input.format,
-            format_session_context_markdown(
-                &output.session,
-                &output.tasks,
-                &output.recent_observations,
-            ),
-            output,
-        )
+        markdown_response(format_session_context_markdown(
+            &output.session,
+            &output.tasks,
+            &output.recent_observations,
+        ))
     }
 
     /// Open a task inside a session, optionally nested under a parent task for subagent coordination.
     #[tool(
-        name = "task_open",
+        name = "open_task",
         annotations(
             title = "Open a session task",
             read_only_hint = false,
@@ -1413,13 +1316,13 @@ impl PunchcardServer {
                 input.title,
             )
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "task_open", started, 1, 0);
+        record_tool(&project, "open_task", started, 1, 0);
         Ok(Json(task))
     }
 
     /// Close an open task.
     #[tool(
-        name = "task_close",
+        name = "close_task",
         annotations(
             title = "Close a session task",
             read_only_hint = false,
@@ -1439,13 +1342,13 @@ impl PunchcardServer {
             .store
             .task_close(&task_id)
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "task_close", started, 1, 0);
+        record_tool(&project, "close_task", started, 1, 0);
         Ok(Json(task))
     }
 
-    /// Record one working observation in a task. Observations are ephemeral; promote through `change_begin` to make them trusted memory.
+    /// Record one working observation in a task. Observations are ephemeral; promote through `start_change` to make them trusted memory.
     #[tool(
-        name = "task_note_save",
+        name = "save_task_note",
         annotations(
             title = "Save a task working note",
             read_only_hint = false,
@@ -1476,13 +1379,13 @@ impl PunchcardServer {
             .store
             .prune_observations(&project.id, project.config.memory.session.max_observations)
             .map_err(|error| error.to_string())?;
-        record_tool(&project, "task_note_save", started, 1, 0);
+        record_tool(&project, "save_task_note", started, 1, 0);
         Ok(Json(observation))
     }
 
     /// Search working observations with FTS, optionally scoped to a task subtree. This does not modify state.
     #[tool(
-        name = "task_note_search",
+        name = "search_task_notes",
         annotations(
             title = "Search task working notes",
             read_only_hint = true,
@@ -1516,21 +1419,17 @@ impl PunchcardServer {
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
         record_tool(
             &project,
-            "task_note_search",
+            "search_task_notes",
             started,
             output.observations.len(),
             bytes,
         );
-        retrieval_response(
-            &input.format,
-            format_observations_markdown(&output.observations),
-            output,
-        )
+        markdown_response(format_observations_markdown(&output.observations))
     }
 
     /// Summarize a task from its observations. This does not modify state.
     #[tool(
-        name = "task_summary",
+        name = "summarize_task",
         annotations(
             title = "Summarize a session task",
             read_only_hint = true,
@@ -1574,34 +1473,17 @@ impl PunchcardServer {
         let bytes = serde_json::to_vec(&output).map_or(0, |value| value.len());
         record_tool(
             &project,
-            "task_summary",
+            "summarize_task",
             started,
             output.observation_count,
             bytes,
         );
-        retrieval_response(
-            &input.format,
-            format_task_summary_markdown(&task, &observations),
-            output,
-        )
+        markdown_response(format_task_summary_markdown(&task, &observations))
     }
 }
 
-fn default_retrieval_format() -> String {
-    "markdown".to_owned()
-}
-
-fn retrieval_response<T: Serialize>(
-    format: &str,
-    markdown: String,
-    json: T,
-) -> Result<CallToolResult, String> {
-    if wants_json_format(format) {
-        let value = serde_json::to_value(json).map_err(|error| error.to_string())?;
-        Ok(CallToolResult::structured(value))
-    } else {
-        Ok(CallToolResult::success(markdown.into_contents()))
-    }
+fn markdown_response(markdown: String) -> Result<CallToolResult, String> {
+    Ok(CallToolResult::success(markdown.into_contents()))
 }
 
 fn deck_observations(
@@ -1778,16 +1660,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn context_prepare_input_accepts_legacy_parameter_names() {
-        let parsed: super::ContextPrepareInput = serde_json::from_str(
-            r#"{"query":"fix atenea integration tests","paths":["tests/","src/atenea/"]}"#,
-        )
-        .expect("legacy aliases should deserialize");
-        assert_eq!(parsed.task, "fix atenea integration tests");
-        assert_eq!(parsed.hints, ["tests/", "src/atenea/"]);
-    }
-
     #[tokio::test]
     async fn stdio_protocol_lists_vertical_slice_tools() {
         let temporary = tempdir().expect("temporary directory should exist");
@@ -1824,22 +1696,22 @@ mod tests {
         let names: Vec<_> = tools.tools.iter().map(|tool| tool.name.as_ref()).collect();
 
         assert!(
-            names.contains(&"context_prepare"),
-            "missing context_prepare in {names:?}"
+            names.contains(&"get_context"),
+            "missing get_context in {names:?}"
         );
         assert!(
-            names.contains(&"change_promote"),
-            "missing change_promote in {names:?}"
+            names.contains(&"save_memory"),
+            "missing save_memory in {names:?}"
         );
         let promote = tools
             .tools
             .iter()
-            .find(|tool| tool.name == "change_promote")
-            .expect("change_promote metadata should exist");
+            .find(|tool| tool.name == "save_memory")
+            .expect("save_memory metadata should exist");
         let annotations = promote
             .annotations
             .as_ref()
-            .expect("change_promote should declare safety annotations");
+            .expect("save_memory should declare safety annotations");
         assert_eq!(
             annotations.title.as_deref(),
             Some("Activate validated project memory")
@@ -1851,13 +1723,13 @@ mod tests {
                 .get("required")
                 .and_then(serde_json::Value::as_array)
                 .is_some_and(|required| required.iter().any(|field| field == "change_title")),
-            "change_promote must require a human-readable title for approval"
+            "save_memory must require a human-readable title for approval"
         );
         running_client
             .peer()
-            .call_tool(CallToolRequestParams::new("rag_status"))
+            .call_tool(CallToolRequestParams::new("check_docs_index"))
             .await
-            .expect("rag_status should execute through MCP");
+            .expect("check_docs_index should execute through MCP");
 
         running_client
             .cancel()
@@ -1872,7 +1744,7 @@ mod tests {
             .connection()
             .query_row(
                 "SELECT COUNT(*) FROM audit_log
-                 WHERE project_id = ?1 AND operation = 'rag_status'",
+                 WHERE project_id = ?1 AND operation = 'check_docs_index'",
                 [project_id.as_str()],
                 |row| row.get(0),
             )

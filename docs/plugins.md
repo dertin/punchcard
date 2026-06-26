@@ -47,8 +47,9 @@ punchcard plugin status
 punchcard doctor
 ```
 
-The Cursor plugin is linked from `plugins/cursor`. The Codex plugin is
-installed globally as `punchcard@punchcard` from `plugins/punchcard`.
+The Cursor plugin source lives in `plugins/cursor`. The Codex plugin source
+lives in `plugins/codex`; during installation Codex registers it globally as
+`punchcard@punchcard` under `~/.codex/plugins/codex/codex`.
 
 Lifecycle commands are idempotent:
 

@@ -36,13 +36,13 @@ with open(path) as f:
         by_day.setdefault(day, Counter())[tool] += 1
 
 discover = {
-    "context_prepare", "rag_search", "rag_get", "rag_status",
-    "memory_search", "memory_get", "memory_list", "memory_review",
+    "get_context", "search_docs", "read_doc", "check_docs_index",
+    "search_memory", "read_memory", "list_memory", "review_memory",
 }
-govern = {"change_begin", "validation_run", "change_promote", "change_fail"}
+govern = {"start_change", "run_validation", "save_memory", "record_change_failure"}
 session = {
-    "session_start", "session_end", "session_context",
-    "task_open", "task_close", "task_note_save", "task_note_search", "task_summary",
+    "start_session", "end_session", "get_session_context",
+    "open_task", "close_task", "save_task_note", "search_task_notes", "summarize_task",
 }
 
 total = sum(counts.values()) or 1
@@ -62,11 +62,11 @@ for tool, n in counts.most_common(12):
 if d == 0 and g > 0:
     print()
     print("WARN: govern without any discover — Enriched routing likely skipped.")
-    print("      Expect context_prepare before change_begin on refactor/feature work.")
-elif counts["context_prepare"] > 0 and counts["change_begin"] > 0:
+    print("      Expect get_context before start_change on refactor/feature work.")
+elif counts["get_context"] > 0 and counts["start_change"] > 0:
     # crude ordering proxy: not perfect, but flags obvious inversion
     print()
-    print("OK: both context_prepare and govern recorded — check ordering in transcripts.")
+    print("OK: both get_context and govern recorded — check ordering in transcripts.")
 
 print()
 print("By day (discover / govern):")

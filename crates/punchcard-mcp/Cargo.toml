@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+default = ["vendored-protoc"]
+vendored-protoc = ["punchcard-rag/vendored-protoc"]
+
 [dependencies]
 chrono.workspace = true
 hex.workspace = true
@@ -13,7 +17,7 @@ punchcard-rules = { path = "../punchcard-rules" }
 punchcard-core = { path = "../punchcard-core" }
 punchcard-integrations = { path = "../punchcard-integrations" }
 punchcard-memory = { path = "../punchcard-memory" }
-punchcard-rag = { path = "../punchcard-rag" }
+punchcard-rag = { path = "../punchcard-rag", default-features = false }
 punchcard-store = { path = "../punchcard-store" }
 rmcp.workspace = true
 schemars.workspace = true

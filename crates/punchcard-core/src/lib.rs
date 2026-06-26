@@ -499,12 +499,12 @@ pub struct DeckItem {
     pub untrusted_content: bool,
 }
 
-/// One evidence item returned to agents from `context_prepare`.
+/// One evidence item returned to agents from `get_context`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AgentDeckItem {
     /// Item category such as `memory`, `document`, `hint`, or `observation`.
     pub category: String,
-    /// Stable reference for `memory_get` / `rag_get` / paths.
+    /// Stable reference for `read_memory` / `read_doc` / paths.
     pub reference: String,
     /// Compact title.
     pub title: String,
@@ -648,8 +648,8 @@ pub struct Task {
 /// One ephemeral observation recorded inside a session/task.
 ///
 /// Observations are working memory: they are never trusted current knowledge
-/// until promoted through the governed `change_begin` → validation →
-/// `change_promote` path.
+/// until promoted through the governed `start_change` → validation →
+/// `save_memory` path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TaskObservation {
     /// Observation identity.
@@ -739,7 +739,7 @@ pub struct MemorySettings {
     /// Working-session and task settings.
     #[serde(default)]
     pub session: SessionSettings,
-    /// Cross-repository workspace awareness for `context_prepare`.
+    /// Cross-repository workspace awareness for `get_context`.
     #[serde(default)]
     pub workspace: WorkspaceSettings,
 }
@@ -747,12 +747,12 @@ pub struct MemorySettings {
 /// Workspace awareness behavior for a shared `state_db`.
 ///
 /// These settings only take effect when several initialized repositories share one
-/// database (see [`StorageSettings::state_db`]). They control whether `context_prepare`
+/// database (see [`StorageSettings::state_db`]). They control whether `get_context`
 /// surfaces compact pointers to sibling repositories that hold task-relevant governed
 /// memory, without injecting their full content into the task deck.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSettings {
-    /// Include sibling-repository pointers in `context_prepare` decks.
+    /// Include sibling-repository pointers in `get_context` decks.
     #[serde(default = "default_workspace_context_pointers")]
     pub context_pointers: bool,
     /// Maximum sibling-repository pointers to include.
@@ -797,10 +797,10 @@ pub struct SessionSettings {
     /// Maximum observations to keep per project; `0` keeps all.
     #[serde(default = "default_max_observations")]
     pub max_observations: usize,
-    /// Maximum task observations injected into a deck by `context_prepare`.
+    /// Maximum task observations injected into a deck by `get_context`.
     #[serde(default = "default_deck_observations")]
     pub deck_observations: usize,
-    /// Maximum governed-memory cards injected into a deck by `context_prepare`.
+    /// Maximum governed-memory cards injected into a deck by `get_context`.
     #[serde(default = "default_deck_memories")]
     pub deck_memories: usize,
 }
@@ -1232,10 +1232,10 @@ pub struct MemorySearchHit {
 ///
 /// Exposes the knowledge-bearing fields from [`MemorySearchHit`] without
 /// evidence references, file hashes, or other audit metadata. Request the full
-/// envelope with `memory_get` and `detail=full` when those fields are needed.
+/// envelope with `read_memory` and `detail=full` when those fields are needed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct MemoryRecallHit {
-    /// Card identity for `memory_get` follow-up.
+    /// Card identity for `read_memory` follow-up.
     pub id: CardId,
     /// Searchable headline.
     pub title: String,

@@ -68,8 +68,10 @@ The Context7 documentation connector returned `fetch failed`; exact APIs were
 therefore verified from crates.io metadata and the downloaded upstream crate
 source.
 
-The host does not provide `protoc`. Lance's vendored `protoc` feature is used
-as a build-time dependency so installation does not require a system package.
+The host does not provide `protoc`. The default `vendored-protoc` feature uses
+Lance's vendored protobuf toolchain so installation does not require a system
+package. Developer machines can install `protobuf-compiler` and build with
+`--no-default-features` to skip the vendored `protobuf-src` build.
 
 ## Safety result
 
