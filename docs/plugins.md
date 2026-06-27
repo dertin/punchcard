@@ -17,7 +17,9 @@ Regenerate or verify every owned artifact with:
 ```
 
 `sync` renders plugin bundles, the Cursor always-on rule, and `punchcard.md`.
-End-user installs never write `AGENTS.md`.
+Plugin installation does not write `AGENTS.md`; project initialization writes
+or refreshes a marked Punchcard block there so Codex receives the same
+always-on routing policy without owning unrelated project guidance.
 
 ## MCP approval dialogs
 

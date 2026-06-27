@@ -16,6 +16,7 @@ const PUNCHCARD_INSTRUCTIONS_TEMPLATE: &str = include_str!("../assets/punchcard.
 const ACTIVATION: &str = include_str!("../assets/activation.md");
 const WORKFLOW: &str = include_str!("../assets/workflow.md");
 const CURSOR_RULE_TEMPLATE: &str = include_str!("../assets/cursor-rule.mdc");
+const CODEX_AGENTS_TEMPLATE: &str = include_str!("../assets/codex-agents.md");
 const CURSOR_PLUGIN_TEMPLATE: &str = include_str!("../assets/cursor-plugin.json");
 const CODEX_PLUGIN_TEMPLATE: &str = include_str!("../assets/codex-plugin.json");
 const CURSOR_MCP: &str = include_str!("../assets/cursor-mcp.json");
@@ -31,10 +32,24 @@ const MCP_INSTRUCTIONS_ASSET: &str = include_str!("../assets/mcp-instructions.md
 /// Canonical MCP server instruction text.
 pub const MCP_INSTRUCTIONS: &str = MCP_INSTRUCTIONS_ASSET;
 
+/// Opening marker for the Punchcard-owned block in a project's `AGENTS.md`.
+pub const AGENTS_BLOCK_START: &str = "<!-- punchcard:managed:start -->";
+
+/// Closing marker for the Punchcard-owned block in a project's `AGENTS.md`.
+pub const AGENTS_BLOCK_END: &str = "<!-- punchcard:managed:end -->";
+
 /// Renders the always-applied Cursor rule.
 #[must_use]
 pub fn render_cursor_rule() -> String {
     render_policy_template(CURSOR_RULE_TEMPLATE)
+}
+
+/// Renders the managed Codex project-guidance block.
+#[must_use]
+pub fn render_codex_agents_block() -> String {
+    render_policy_template(CODEX_AGENTS_TEMPLATE)
+        .trim_end()
+        .to_owned()
 }
 
 /// Renders the global Punchcard instruction file for end-user projects.
@@ -209,8 +224,10 @@ fn render_version_template(template: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        render_agent_assets, render_context_skill, render_cursor_rule, render_delivery_assets,
-        render_mcp_instructions, render_memory_skill, render_punchcard_instructions,
+        AGENTS_BLOCK_END, AGENTS_BLOCK_START, ROUTING, render_agent_assets,
+        render_codex_agents_block, render_context_skill, render_cursor_rule,
+        render_delivery_assets, render_mcp_instructions, render_memory_skill,
+        render_punchcard_instructions,
     };
 
     #[test]
@@ -267,6 +284,17 @@ mod tests {
             classify < success,
             "cursor rule should classify before principles"
         );
+    }
+
+    #[test]
+    fn cursor_and_codex_agents_share_canonical_routing() {
+        let cursor = render_cursor_rule();
+        let codex = render_codex_agents_block();
+
+        assert!(cursor.contains(ROUTING.trim()));
+        assert!(codex.contains(ROUTING.trim()));
+        assert!(codex.starts_with(AGENTS_BLOCK_START));
+        assert!(codex.ends_with(AGENTS_BLOCK_END));
     }
 
     #[test]
@@ -354,7 +382,10 @@ mod tests {
         assert!(cursor.contains("before") && cursor.contains("Read/Grep"));
         assert!(cursor.contains("Enriched"));
         assert!(cursor.contains("Focused"));
-        assert!(context.contains("Tier gate"));
+        assert!(context.contains("Tier and route gate"));
+        assert!(context.contains("**Trivial** | **Direct edit**"));
+        assert!(context.contains("**Focused** | **Discover**"));
+        assert!(context.contains("**Enriched** | **Discover**"));
         assert!(context.contains("repo-wide"));
         assert!(memory.contains("deck ref"));
     }

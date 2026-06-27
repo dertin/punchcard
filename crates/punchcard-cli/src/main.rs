@@ -22,7 +22,8 @@ use punchcard_integrations::{
     set_rag_embedding_model, uninstall_plugin, upgrade_plugin,
 };
 use punchcard_memory::{
-    WorkspacePointerInput, governed_memory_hit_for_card, memory_recall_hit, prepare_promotion,
+    WorkspacePointerInput, append_change_summary_notes, governed_memory_hit_for_card,
+    memory_recall_hit, prepare_promotion, require_learned_note, validate_draft_change_summary,
     workspace_pointers,
 };
 use punchcard_security::{
@@ -353,6 +354,12 @@ enum ChangeCommand {
 struct ChangePromoteArgs {
     /// Change intent ID.
     change_id: String,
+    /// Resolution for failed validations, if any.
+    #[arg(long)]
+    resolution: Option<String>,
+    /// Final note captured after validation; required at promote time.
+    #[arg(long)]
+    learned: Option<String>,
     /// Repository-relative files associated with the implementation.
     #[arg(long = "file")]
     files: Vec<PathBuf>,
@@ -363,7 +370,7 @@ struct ChangeBeginArgs {
     /// Compact card title.
     #[arg(long)]
     title: String,
-    /// Bounded factual summary to activate after validation.
+    /// Bounded factual summary for What / Why / Where; Learned is added at promote time.
     #[arg(long)]
     summary: String,
     /// Card kind: implementation, decision, constraint, failure, `document_reference`.
@@ -552,6 +559,7 @@ fn command_init(cli: &Cli, arguments: &InitArgs) -> Result<()> {
     let value = serde_json::json!({
         "project_root": outcome.project_root,
         "config_created": outcome.config_created,
+        "agents_instructions_updated": outcome.agents_instructions_updated,
         "codegraph_initialized": outcome.codegraph_initialized,
         "rag_profile": punchcard_rag::embedding_profile(&config.rag.embedding_model),
         "state_db": resolve_state_db_path(&outcome.project_root, &config),
@@ -822,6 +830,7 @@ fn command_change(cli: &Cli, command: ChangeCommand) -> Result<()> {
     let context = open_project(cli)?;
     match command {
         ChangeCommand::Begin(arguments) => {
+            validate_draft_change_summary(&arguments.summary).map_err(|error| anyhow::anyhow!(error))?;
             let intent = ChangeIntent {
                 id: ChangeId::new(),
                 project_id: context.id,
@@ -852,7 +861,14 @@ fn command_change(cli: &Cli, command: ChangeCommand) -> Result<()> {
         }
         ChangeCommand::Promote(arguments) => {
             let change_id = ChangeId::parse(arguments.change_id)?;
-            let intent = context.store.get_change(&change_id)?;
+            let mut intent = context.store.get_change(&change_id)?;
+            let learned = require_learned_note(arguments.learned.as_deref())
+                .map_err(|error| anyhow::anyhow!(error))?;
+            intent.summary = append_change_summary_notes(
+                &intent.summary,
+                arguments.resolution.as_deref(),
+                Some(learned),
+            );
             let validations = context.store.validations_for_change(&change_id)?;
             let active_cards = context.store.active_cards_for_change(&intent)?;
             let files = fingerprint_project_files(&context.root, &arguments.files)?;

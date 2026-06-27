@@ -9,7 +9,7 @@ versioned in Git; runtime data under `.punchcard/` such as `state.db`, `rag/`,
 | Action | Writes `config.toml`? | What changes |
 | --- | --- | --- |
 | `punchcard init` | Yes, once | Creates the full default file when it does not exist yet |
-| `punchcard init` (repeat) | No | Existing configuration is never overwritten |
+| `punchcard init` (repeat) | No | Existing configuration is never overwritten; the managed `AGENTS.md` block is still checked and repaired |
 | `punchcard rag model set <profile>` | Yes | Updates only `rag.embedding_model` |
 | Any other command | No | Reads configuration only |
 | Manual edit | Yes | Any section the operator chooses to add or change |
@@ -32,8 +32,10 @@ Agent integration files (`.cursor/`, `.codex/`, plugins) are separate outputs.
 They are not substitutes for `.punchcard/config.toml`.
 
 Global Punchcard workflow instructions are generated as `punchcard.md` at the
-repository root. Cursor uses `.cursor/rules/punchcard.mdc` and plugin
-skills. Punchcard does not install or overwrite a project's `AGENTS.md`.
+repository root. Cursor uses `.cursor/rules/punchcard.mdc` and plugin skills.
+Codex uses the same canonical routing policy through a marked block in the
+root `AGENTS.md`; `punchcard init` appends or refreshes only that block and
+preserves all other project instructions.
 
 ## Complete example (Rust workspace)
 

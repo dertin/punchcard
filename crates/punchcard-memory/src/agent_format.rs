@@ -260,9 +260,9 @@ pub fn format_change_started_markdown(intent: &ChangeIntent) -> String {
     if let Some(supersedes) = &intent.supersedes {
         let _ = writeln!(output, "supersedes: `{supersedes}`");
     }
-    output.push_str("\n");
+    output.push('\n');
     output.push_str(intent.summary.trim());
-    output.push_str("\n");
+    output.push('\n');
     output
 }
 
@@ -293,8 +293,82 @@ pub fn format_card_promoted_markdown(card: &Card) -> String {
     let mut output = format!("# Memory promoted\n\ncard_id: `{}`\n", card.id);
     let _ = writeln!(output, "title: {}\n", card.title.trim());
     output.push_str(card.summary.trim());
-    output.push_str("\n");
+    output.push('\n');
     output
+}
+
+/// Appends late-bound promotion notes to a base change summary.
+///
+/// `Resolution` captures how failing validations were fixed. `Learned` captures
+/// the final correction or constraint that became clear only after validation.
+#[must_use]
+pub fn append_change_summary_notes(
+    summary: &str,
+    resolution: Option<&str>,
+    learned: Option<&str>,
+) -> String {
+    let mut output = summary.trim().to_owned();
+    let mut push_note = |label: &str, value: Option<&str>| {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            return;
+        };
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        let _ = writeln!(output, "{label}: {value}");
+    };
+    push_note("Resolution", resolution);
+    push_note("Learned", learned);
+    if !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output
+}
+
+/// Validates the draft summary for `start_change`.
+///
+/// The draft should contain `What`, `Why`, and `Where` only. `Learned`,
+/// `Resolution`, and `Evidence` are reserved for the promotion stage.
+///
+/// # Errors
+///
+/// Returns an error when the draft summary omits a required section or uses a
+/// final-stage section too early.
+pub fn validate_draft_change_summary(summary: &str) -> Result<(), String> {
+    let mut has_what = false;
+    let mut has_why = false;
+    let mut has_where = false;
+    for line in summary.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("Learned:")
+            || trimmed.starts_with("Resolution:")
+            || trimmed.starts_with("Evidence:")
+        {
+            return Err(
+                "draft change summary must not include Learned, Resolution, or Evidence"
+                    .to_owned(),
+            );
+        }
+        has_what |= trimmed.starts_with("What:");
+        has_why |= trimmed.starts_with("Why:");
+        has_where |= trimmed.starts_with("Where:");
+    }
+    if !has_what || !has_why || !has_where {
+        return Err("draft change summary must include What, Why, and Where".to_owned());
+    }
+    Ok(())
+}
+
+/// Validates that promotion has a final `Learned` note.
+///
+/// # Errors
+///
+/// Returns an error when the note is missing or blank.
+pub fn require_learned_note(learned: Option<&str>) -> Result<&str, String> {
+    learned
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "save_memory requires a final Learned note".to_owned())
 }
 
 /// Renders a terminal change failure.
@@ -332,11 +406,7 @@ pub fn format_session_context_markdown(
     } else {
         let _ = writeln!(output, "session: `{}`", session.id);
     }
-    let _ = writeln!(
-        output,
-        "status: {}\n",
-        session_status_label(&session.status)
-    );
+    let _ = writeln!(output, "status: {}\n", session_status_label(session.status));
 
     if !tasks.is_empty() {
         output.push_str("## Tasks\n\n");
@@ -346,7 +416,7 @@ pub fn format_session_context_markdown(
                 "- {} (`{}`, {})",
                 task.title.trim(),
                 task.id,
-                task_status_label(&task.status)
+                task_status_label(task.status)
             );
         }
         output.push('\n');
@@ -362,7 +432,7 @@ pub fn format_session_context_markdown(
                 output,
                 "- {} [{}]: {summary}",
                 observation.title.trim(),
-                observation_kind_label(&observation.kind)
+                observation_kind_label(observation.kind)
             );
         }
         output.push('\n');
@@ -406,21 +476,21 @@ pub fn format_task_summary_markdown(task: &Task, observations: &[TaskObservation
     output
 }
 
-fn session_status_label(status: &SessionStatus) -> &'static str {
+fn session_status_label(status: SessionStatus) -> &'static str {
     match status {
         SessionStatus::Open => "open",
         SessionStatus::Closed => "closed",
     }
 }
 
-fn task_status_label(status: &TaskStatus) -> &'static str {
+fn task_status_label(status: TaskStatus) -> &'static str {
     match status {
         TaskStatus::Open => "open",
         TaskStatus::Closed => "closed",
     }
 }
 
-fn observation_kind_label(kind: &ObservationKind) -> &'static str {
+fn observation_kind_label(kind: ObservationKind) -> &'static str {
     match kind {
         ObservationKind::Note => "note",
         ObservationKind::Summary => "summary",
@@ -438,7 +508,8 @@ mod tests {
     };
 
     use super::{
-        format_agent_deck_markdown, format_change_started_markdown, format_memory_recall_markdown,
+        append_change_summary_notes, format_agent_deck_markdown, format_change_started_markdown,
+        format_memory_recall_markdown, validate_draft_change_summary,
     };
 
     #[test]
@@ -488,6 +559,36 @@ mod tests {
         assert!(markdown.contains("change_id:"));
         assert!(markdown.contains("required_validations: check"));
         assert!(!markdown.contains("project_root"));
+    }
+
+    #[test]
+    fn append_change_summary_notes_places_resolution_before_learned() {
+        let summary = append_change_summary_notes(
+            "What: fix the flow\nWhy: preserve provenance",
+            Some("adjusted clippy lint-only code"),
+            Some("learned to defer final notes until after validation"),
+        );
+
+        assert_eq!(
+            summary,
+            "What: fix the flow\nWhy: preserve provenance\nResolution: adjusted clippy lint-only code\nLearned: learned to defer final notes until after validation\n"
+        );
+    }
+
+    #[test]
+    fn draft_change_summary_rejects_final_only_sections() {
+        let error = validate_draft_change_summary(
+            "What: work\nWhy: need this\nWhere: src/lib.rs\nLearned: too early",
+        )
+        .expect_err("draft summary should reject learned");
+        assert!(error.contains("must not include Learned"));
+    }
+
+    #[test]
+    fn draft_change_summary_requires_the_base_sections() {
+        let error = validate_draft_change_summary("What: work\nWhy: need this")
+            .expect_err("draft summary should require where");
+        assert!(error.contains("must include What, Why, and Where"));
     }
 
     #[test]

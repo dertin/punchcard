@@ -53,21 +53,19 @@ A failed or interrupted implementation attempt is **recorded** with `record_chan
 (state `failed` or `incomplete`) and stays searchable in the archive. You then
 **retry** with a fresh `start_change`; the failed attempt never replaces or
 overwrites `active` memory, so current knowledge is preserved across retries.
+`Learned` is added only at `save_memory`; `Resolution` records how validation
+failures were fixed.
 
 ## Card shape
 
 Each card stores `title`, `summary`, `kind`, `memory_kind`, `source_refs`,
 `evidence_refs`, `associated_files`, and optional `supersedes`.
 
-**Summary format** (agent-authored, stored in `summary`):
+**Summary format**:
 
-```text
-What: …
-Why: …
-Where: …
-Learned: … (optional)
-Evidence: …
-```
+- `start_change`: `What` / `Why` / `Where`
+- `save_memory`: append final `Resolution:` and `Learned:` notes after validation
+- `Evidence`: keep the validation refs with the promoted card
 
 `title` is the searchable headline; structured fields live in `summary` so FTS
 and decks stay simple without a separate observation schema.

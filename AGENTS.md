@@ -1,8 +1,4 @@
----
-description: Token-efficient, low-slop evidence and governed-memory workflow
-alwaysApply: true
----
-
+<!-- punchcard:managed:start -->
 # Punchcard
 
 ## Classify (before any tool)
@@ -98,3 +94,4 @@ When evidence disagrees: current source/config > Punchcard validations > active 
 
 Before **done**: `summarize_task`; `close_task` subagents; `end_session`.
 `review_memory(stale)` for outdated cards; `forget_memory` (dry-run first) to drop retrieval.
+<!-- punchcard:managed:end -->

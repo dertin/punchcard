@@ -16,11 +16,12 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 pub use agent_format::{
-    format_agent_deck_markdown, format_card_promoted_markdown, format_change_fail_markdown,
-    format_change_started_markdown, format_document_chunk_markdown, format_memory_full_markdown,
-    format_memory_recall_markdown, format_memory_recalls_markdown, format_observations_markdown,
-    format_rag_hits_markdown, format_rag_status_markdown, format_session_context_markdown,
-    format_task_summary_markdown, format_validation_result_markdown,
+    append_change_summary_notes, format_agent_deck_markdown, format_card_promoted_markdown,
+    format_change_fail_markdown, format_change_started_markdown, format_document_chunk_markdown,
+    format_memory_full_markdown, format_memory_recall_markdown, format_memory_recalls_markdown,
+    format_observations_markdown, format_rag_hits_markdown, format_rag_status_markdown,
+    format_session_context_markdown, format_task_summary_markdown,
+    format_validation_result_markdown, require_learned_note, validate_draft_change_summary,
 };
 
 /// Inputs for building the cross-repository workspace section of a context deck.

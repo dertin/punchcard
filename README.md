@@ -16,7 +16,9 @@ Installing Punchcard adds rules, skills, and an MCP server to your agent (Cursor
 
 The result is more accurate, better-grounded agent work with less wasted context, and a memory of decisions and constraints that future sessions can recall.
 
-The exact policy that drives this behavior lives in the generated `punchcard.md` and `.cursor/rules/punchcard.mdc`; you normally never edit these.
+The exact policy that drives this behavior lives in the generated `punchcard.md`,
+`.cursor/rules/punchcard.mdc`, and the Punchcard-managed block in `AGENTS.md`;
+you normally never edit the generated or managed content.
 
 ## Setup
 
@@ -37,7 +39,10 @@ punchcard doctor
 
 `punchcard init` defaults to the `code` RAG profile (CodeRankEmbed INT8 plus BM25). Use `--rag-profile fast` when resource use matters more than code-specific retrieval. The first index downloads the pinned model into `.punchcard/rag/models`. See [Documentary retrieval](docs/rag.md) for models and switching.
 
-Each initialized repository gets its own `.punchcard/config.toml` (created by `punchcard init`). See [Configuration](docs/configuration.md) for all options.
+Each initialized repository gets its own `.punchcard/config.toml` and a managed
+Punchcard policy block in `AGENTS.md` (created or repaired by `punchcard init`).
+Existing `AGENTS.md` content is preserved. See [Configuration](docs/configuration.md)
+for all options.
 
 ## Agent integration
 

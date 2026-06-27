@@ -6,7 +6,8 @@ it to `~/.codex/plugins/codex/codex` and registers it as
 `punchcard@punchcard`; the selector follows the Codex marketplace id and plugin
 id, while filesystem directories stay agent-named.
 
-The skills, hooks, manifest, and generated `punchcard.md` instructions are rendered from
+The skills, hooks, manifest, generated `punchcard.md`, and the managed
+Punchcard block installed in a project's `AGENTS.md` are rendered from
 `crates/punchcard-rules/assets`. Do not edit generated copies directly; run
 `./scripts/agent-assets.sh sync` after changing the canonical source.
 
@@ -21,8 +22,10 @@ punchcard plugin install codex --local-source ./plugins
 punchcard plugin status
 ```
 
-Run `install` from any initialized repository; it does not modify that
-repository's `AGENTS.md`.
+`punchcard init` creates or refreshes a marked Punchcard block in the root
+`AGENTS.md`. Existing project instructions outside that block are preserved.
+Running `init` again also repairs a missing or stale Punchcard block without
+overwriting `.punchcard/config.toml`.
 
 Restart Codex after changing plugin or project MCP configuration. The server
 instructions place the complete workflow guidance inside the first 512

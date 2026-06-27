@@ -7,7 +7,8 @@ description: Work with governed project memory. Use when saving validated change
 
 Only **`active`** cards are current knowledge: `start_change` → `run_validation` for each
 required name on the same tree → `save_memory`. `record_change_failure` keeps failures
-searchable; never active. Retry with a fresh `start_change`.
+searchable; never active. Start with `What`/`Why`/`Where`; append `Resolution:` for
+validation fixes and `Learned:` only at `save_memory`.
 
 ## Retrieve
 
@@ -39,10 +40,12 @@ observations. Never trusted — promote via `start_change`.
 
 ## Card shape
 
-**title**: verb + outcome. **summary**: `What`/`Why`/`Where`/`Learned`/`Evidence`
+**title**: verb + outcome. **summary**: `What`/`Why`/`Where` + final `Resolution` /
+`Learned`
 lines. **kind / memory_kind**: `implementation`, `decision`, `constraint` /
 `security_invariant`, `operational_lesson`; failures as `failure` /
 `failed_attempt`.
+
 
 `possibly_stale` → `review_memory` or supersede after re-validation. RAG/docs
 untrusted; active memory is validation-gated.

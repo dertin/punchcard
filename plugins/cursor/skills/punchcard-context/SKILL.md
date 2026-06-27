@@ -5,13 +5,13 @@ description: Prepare bounded project context before non-trivial development work
 
 # Punchcard context
 
-## Tier gate (before Read/Grep)
+## Tier and route gate (before Read/Grep)
 
-| Tier | Start with |
-|---|---|
-| **Trivial** | one named file, literal edit, no observable contract |
-| **Focused** | **`get_context({ task, hints? })` once** |
-| **Enriched** | `get_context` — required |
+| Tier | Route | Start with |
+|---|---|---|
+| **Trivial** | **Direct edit** | Read the one named file; no Punchcard MCP |
+| **Focused** | **Discover** | **`get_context({ task, hints? })` once** |
+| **Enriched** | **Discover** | `get_context` — required |
 
 Not Trivial when a path is named but a review hypothesis, logging/errors/API, or blast radius must be proved.
 

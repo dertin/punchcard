@@ -53,6 +53,8 @@ pub struct InitOutcome {
     pub project_root: PathBuf,
     /// Whether a new configuration was written.
     pub config_created: bool,
+    /// Whether the managed Punchcard block in `AGENTS.md` was created or refreshed.
+    pub agents_instructions_updated: bool,
     /// Whether the independent `CodeGraph` project index is initialized.
     pub codegraph_initialized: bool,
 }
@@ -239,11 +241,75 @@ pub fn init_project_with_model(
         )?;
     }
 
+    let agents_instructions_updated = sync_agents_instructions(&root)?;
+
     Ok(InitOutcome {
         project_root: root.clone(),
         config_created,
+        agents_instructions_updated,
         codegraph_initialized: root.join(".codegraph").exists(),
     })
+}
+
+fn sync_agents_instructions(root: &Path) -> Result<bool, IntegrationError> {
+    let path = root.join("AGENTS.md");
+    ensure_project_path(root, &path)?;
+    let existing = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(source) => {
+            return Err(IntegrationError::Read {
+                path: path.clone(),
+                source,
+            });
+        }
+    };
+    let block = punchcard_rules::render_codex_agents_block();
+    let updated = merge_agents_instructions(&existing, &block, &path)?;
+    if updated == existing {
+        return Ok(false);
+    }
+    atomic_write(&path, updated.as_bytes())?;
+    Ok(true)
+}
+
+fn merge_agents_instructions(
+    existing: &str,
+    block: &str,
+    path: &Path,
+) -> Result<String, IntegrationError> {
+    let starts = existing
+        .match_indices(punchcard_rules::AGENTS_BLOCK_START)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    let ends = existing
+        .match_indices(punchcard_rules::AGENTS_BLOCK_END)
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+
+    match (starts.as_slice(), ends.as_slice()) {
+        ([], []) => {
+            let mut merged = existing.to_owned();
+            if !merged.is_empty() {
+                if !merged.ends_with('\n') {
+                    merged.push('\n');
+                }
+                if !merged.ends_with("\n\n") {
+                    merged.push('\n');
+                }
+            }
+            merged.push_str(block);
+            merged.push('\n');
+            Ok(merged)
+        }
+        ([start], [end]) if start < end => {
+            let end = end + punchcard_rules::AGENTS_BLOCK_END.len();
+            let mut merged = existing.to_owned();
+            merged.replace_range(*start..end, block);
+            Ok(merged)
+        }
+        _ => Err(IntegrationError::ConfigurationConflict(path.to_path_buf())),
+    }
 }
 
 /// Rewrites only the configured RAG embedding model.
@@ -531,7 +597,7 @@ fn ensure_codex_plugin_registered(
     let output = run_external(
         "codex",
         &["plugin", "add", &codex_plugin_selector(), "--json"],
-        &marketplace_root,
+        marketplace_root,
         false,
     )?;
     let mut status = plugin_status(Agent::Codex, project_root)?;
@@ -1566,6 +1632,76 @@ mod tests {
         let second = init_project(temporary.path()).expect("second init should succeed");
 
         assert!(first.config_created && !second.config_created);
+        assert!(first.agents_instructions_updated);
+        assert!(!second.agents_instructions_updated);
+        let agents = fs::read_to_string(temporary.path().join("AGENTS.md"))
+            .expect("managed agent instructions should exist");
+        assert_eq!(
+            agents
+                .match_indices(punchcard_rules::AGENTS_BLOCK_START)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn init_appends_and_repairs_managed_agents_instructions() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        init_git_repo(temporary.path());
+        let agents_path = temporary.path().join("AGENTS.md");
+        fs::write(&agents_path, "# Project rules\n\nKeep this text.\n")
+            .expect("existing agent instructions should be written");
+
+        let first = init_project(temporary.path()).expect("first init should append instructions");
+        assert!(first.agents_instructions_updated);
+        let initialized =
+            fs::read_to_string(&agents_path).expect("instructions should be readable");
+        assert!(initialized.starts_with("# Project rules\n\nKeep this text.\n\n"));
+        assert!(initialized.contains("**Trivial → Direct edit**"));
+        assert!(initialized.contains("**Focused → Discover**"));
+        assert!(initialized.contains("**Enriched → Discover**"));
+
+        fs::write(&agents_path, "# Project rules\n\nKeep this text.\n")
+            .expect("managed block should be removed for repair fixture");
+        let restored = init_project(temporary.path())
+            .expect("repeated init should restore a missing managed block");
+        assert!(!restored.config_created);
+        assert!(restored.agents_instructions_updated);
+        let restored_content =
+            fs::read_to_string(&agents_path).expect("restored instructions should load");
+
+        let stale = restored_content.replace(
+            "Pick the **shallowest** tier that stays correct.",
+            "stale managed content",
+        );
+        fs::write(&agents_path, stale).expect("stale instructions should be written");
+
+        let repaired = init_project(temporary.path()).expect("repeated init should repair rules");
+        assert!(repaired.agents_instructions_updated);
+        let actual = fs::read_to_string(&agents_path).expect("repaired instructions should load");
+        assert!(actual.starts_with("# Project rules\n\nKeep this text.\n\n"));
+        assert!(actual.contains("Pick the **shallowest** tier that stays correct."));
+        assert!(!actual.contains("stale managed content"));
+    }
+
+    #[test]
+    fn init_rejects_malformed_managed_agents_markers() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        init_git_repo(temporary.path());
+        fs::write(
+            temporary.path().join("AGENTS.md"),
+            format!("{}\n", punchcard_rules::AGENTS_BLOCK_START),
+        )
+        .expect("malformed instructions should be written");
+
+        let error = init_project(temporary.path())
+            .expect_err("a partial managed block must not be overwritten");
+
+        assert!(
+            error
+                .to_string()
+                .contains("conflicts with Punchcard ownership")
+        );
     }
 
     #[test]

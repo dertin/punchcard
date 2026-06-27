@@ -15,13 +15,13 @@ use punchcard_integrations::{
     load_config, resolve_state_db_path, run_validation,
 };
 use punchcard_memory::{
-    WorkspacePointerInput, format_agent_deck_markdown, format_card_promoted_markdown,
-    format_change_fail_markdown, format_change_started_markdown, format_document_chunk_markdown,
-    format_memory_full_markdown, format_memory_recall_markdown, format_memory_recalls_markdown,
-    format_observations_markdown, format_rag_hits_markdown, format_rag_status_markdown,
-    format_session_context_markdown, format_task_summary_markdown,
+    WorkspacePointerInput, append_change_summary_notes, format_agent_deck_markdown,
+    format_card_promoted_markdown, format_change_fail_markdown, format_change_started_markdown,
+    format_document_chunk_markdown, format_memory_full_markdown, format_memory_recall_markdown,
+    format_memory_recalls_markdown, format_observations_markdown, format_rag_hits_markdown,
+    format_rag_status_markdown, format_session_context_markdown, format_task_summary_markdown,
     format_validation_result_markdown, governed_memory_hit_for_card, memory_recall_hit,
-    prepare_promotion, workspace_pointers,
+    prepare_promotion, require_learned_note, validate_draft_change_summary, workspace_pointers,
 };
 use punchcard_store::{GovernedForgetRequest, Store};
 use rmcp::{
@@ -54,8 +54,7 @@ impl PunchcardServer {
     /// Returns [`McpServerError`] when the Punchcard project root cannot be resolved.
     pub fn new(root: &Path) -> Result<Self, McpServerError> {
         let root = match find_project_root(root) {
-            Ok(root) => root,
-            Err(IntegrationError::GitRootNotFound(root)) => root,
+            Ok(root) | Err(IntegrationError::GitRootNotFound(root)) => root,
             Err(error) => return Err(error.into()),
         };
         let configured = is_punchcard_project(&root);
@@ -182,7 +181,7 @@ struct ContextPrepareInput {
 struct ChangeBeginInput {
     /// Compact title: verb + outcome (searchable).
     title: String,
-    /// Structured summary. Use What / Why / Where / Learned / Evidence lines.
+    /// Structured summary. Use What / Why / Where lines; Learned is appended at promote time.
     summary: String,
     /// implementation, decision, constraint, failure, or `document_reference`.
     #[serde(default = "default_implementation")]
@@ -210,6 +209,12 @@ struct ChangePromoteInput {
     change_id: String,
     /// Human-readable change title shown in approval dialogs.
     change_title: String,
+    /// Resolution for failed validations, if any.
+    #[serde(default)]
+    resolution: Option<String>,
+    /// Final note learned after validation; required at promote time.
+    #[serde(default)]
+    learned: Option<String>,
     /// Repository-relative files associated with the validated behavior.
     #[serde(default)]
     files: Vec<PathBuf>,
@@ -845,6 +850,7 @@ impl PunchcardServer {
     ) -> Result<CallToolResult, String> {
         let started = Instant::now();
         let project = self.project()?;
+        validate_draft_change_summary(&input.summary)?;
         let intent = ChangeIntent {
             id: ChangeId::new(),
             project_id: project.id.clone(),
@@ -1102,6 +1108,13 @@ impl PunchcardServer {
             .get_change(&change_id)
             .map_err(|error| error.to_string())?;
         verify_approval_title("change", &intent.title, &input.change_title)?;
+        let mut intent = intent;
+        let learned = require_learned_note(input.learned.as_deref())?;
+        intent.summary = append_change_summary_notes(
+            &intent.summary,
+            input.resolution.as_deref(),
+            Some(learned),
+        );
         let validations = project
             .store
             .validations_for_change(&change_id)
@@ -1500,6 +1513,8 @@ impl PunchcardServer {
     }
 }
 
+// Tool handlers share a fallible return type even though Markdown conversion is infallible.
+#[allow(clippy::unnecessary_wraps)]
 fn markdown_response(markdown: String) -> Result<CallToolResult, String> {
     Ok(CallToolResult::success(markdown.into_contents()))
 }
