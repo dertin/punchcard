@@ -13,6 +13,8 @@ The skills, hooks, manifest, and generated `punchcard.md` instructions are rende
 Installation is global, like Cursor: the bundle is copied to
 `~/.codex/plugins/codex/codex` and registered once as `punchcard@punchcard`
 in `~/.codex/config.toml`. No per-repository `.agents/` files are required.
+Outside an initialized Punchcard project, the MCP server still completes its
+stdio handshake but remains inactive: it advertises no instructions or tools.
 
 ```bash
 punchcard plugin install codex --local-source ./plugins

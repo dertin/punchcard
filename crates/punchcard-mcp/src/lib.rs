@@ -11,7 +11,8 @@ use punchcard_core::{
     TaskObservation,
 };
 use punchcard_integrations::{
-    find_git_root, fingerprint_project_files, load_config, resolve_state_db_path, run_validation,
+    IntegrationError, find_project_root, fingerprint_project_files, is_punchcard_project,
+    load_config, resolve_state_db_path, run_validation,
 };
 use punchcard_memory::{
     WorkspacePointerInput, format_agent_deck_markdown, format_card_promoted_markdown,
@@ -41,24 +42,41 @@ pub const SERVER_INSTRUCTIONS: &str = punchcard_rules::MCP_INSTRUCTIONS;
 #[derive(Debug, Clone)]
 pub struct PunchcardServer {
     root: PathBuf,
-    #[expect(dead_code, reason = "read by rmcp-generated tool routing code")]
+    configured: bool,
     tool_router: ToolRouter<Self>,
 }
 
 impl PunchcardServer {
-    /// Creates an MCP server bound to one Git repository.
+    /// Creates an MCP server bound to one Punchcard project.
     ///
     /// # Errors
     ///
-    /// Returns [`McpServerError`] when the Git root cannot be resolved.
+    /// Returns [`McpServerError`] when the Punchcard project root cannot be resolved.
     pub fn new(root: &Path) -> Result<Self, McpServerError> {
+        let root = match find_project_root(root) {
+            Ok(root) => root,
+            Err(IntegrationError::GitRootNotFound(root)) => root,
+            Err(error) => return Err(error.into()),
+        };
+        let configured = is_punchcard_project(&root);
         Ok(Self {
-            root: find_git_root(root)?,
-            tool_router: Self::tool_router(),
+            root,
+            configured,
+            tool_router: if configured {
+                Self::tool_router()
+            } else {
+                ToolRouter::new()
+            },
         })
     }
 
     fn project(&self) -> Result<Project, String> {
+        if !self.configured {
+            return Err(format!(
+                "{} is not initialized; run `punchcard init`",
+                self.root.display()
+            ));
+        }
         let config = load_config(&self.root).map_err(|error| error.to_string())?;
         let id = ProjectId::from_root(&self.root).map_err(|error| error.to_string())?;
         let store = Store::open(&resolve_state_db_path(&self.root, &config))
@@ -1512,12 +1530,21 @@ fn deck_observations(
     Ok(Vec::new())
 }
 
-#[tool_handler]
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for PunchcardServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("punchcard", env!("CARGO_PKG_VERSION")))
-            .with_instructions(SERVER_INSTRUCTIONS)
+        let capabilities = if self.configured {
+            ServerCapabilities::builder().enable_tools().build()
+        } else {
+            ServerCapabilities::builder().build()
+        };
+        let info = ServerInfo::new(capabilities)
+            .with_server_info(Implementation::new("punchcard", env!("CARGO_PKG_VERSION")));
+        if self.configured {
+            info.with_instructions(SERVER_INSTRUCTIONS)
+        } else {
+            info
+        }
     }
 }
 
@@ -1750,5 +1777,42 @@ mod tests {
             )
             .expect("audit count should be readable");
         assert_eq!(audit_count, 1);
+    }
+
+    #[tokio::test]
+    async fn stdio_protocol_starts_inactive_without_project_config() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        let server =
+            PunchcardServer::new(temporary.path()).expect("unconfigured server should initialize");
+        let (server_transport, client_transport) = tokio::io::duplex(16 * 1024);
+        let server_handle = tokio::spawn(async move {
+            server
+                .serve(server_transport)
+                .await
+                .expect("server handshake should succeed")
+                .waiting()
+                .await
+                .expect("server task should complete")
+        });
+        let running_client =
+            ().serve(client_transport)
+                .await
+                .expect("client handshake should succeed");
+
+        let tools = running_client
+            .peer()
+            .list_tools(Option::default())
+            .await
+            .expect("inactive server should return an empty tool list");
+        assert!(
+            tools.tools.is_empty(),
+            "inactive server must not advertise tools"
+        );
+
+        running_client
+            .cancel()
+            .await
+            .expect("client should stop cleanly");
+        server_handle.await.expect("server join should succeed");
     }
 }

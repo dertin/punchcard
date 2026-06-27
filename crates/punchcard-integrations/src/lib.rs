@@ -70,6 +70,12 @@ pub fn is_git_work_tree(path: &Path) -> bool {
     path.join(".git").join("HEAD").is_file()
 }
 
+/// Returns true when `path` has a Punchcard project configuration.
+#[must_use]
+pub fn is_punchcard_project(path: &Path) -> bool {
+    path.join(".punchcard").join("config.toml").is_file()
+}
+
 /// Finds the nearest Git repository root.
 ///
 /// # Errors
@@ -89,6 +95,35 @@ pub fn find_git_root(start: &Path) -> Result<PathBuf, IntegrationError> {
         }
     }
     Err(IntegrationError::GitRootNotFound(start))
+}
+
+/// Finds the nearest Punchcard project root.
+///
+/// A Punchcard project is either a configured `.punchcard/config.toml` tree or a
+/// Git work tree. Prefer the nearest configured Punchcard root so workspaces can
+/// keep one Punchcard state above multiple repositories.
+///
+/// # Errors
+///
+/// Returns [`IntegrationError::GitRootNotFound`] if no ancestor contains either
+/// `.punchcard/config.toml` or a `.git/HEAD` work tree marker.
+pub fn find_project_root(start: &Path) -> Result<PathBuf, IntegrationError> {
+    let start = start
+        .canonicalize()
+        .map_err(|source| IntegrationError::Canonicalize {
+            path: start.to_path_buf(),
+            source,
+        })?;
+    let mut git_root = None;
+    for candidate in start.ancestors() {
+        if is_punchcard_project(candidate) {
+            return Ok(candidate.to_path_buf());
+        }
+        if git_root.is_none() && is_git_work_tree(candidate) {
+            git_root = Some(candidate.to_path_buf());
+        }
+    }
+    git_root.ok_or(IntegrationError::GitRootNotFound(start))
 }
 
 /// Fingerprints repository-relative files for governed promotion.
@@ -1460,9 +1495,9 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        find_git_root, fingerprint_project_files, init_project, init_project_with_model,
-        is_punchcard_development_repo, load_config, plugin_tree_digest, run_validation,
-        set_rag_embedding_model, set_toml_table_bool, working_tree_hash,
+        find_git_root, find_project_root, fingerprint_project_files, init_project,
+        init_project_with_model, is_punchcard_development_repo, load_config, plugin_tree_digest,
+        run_validation, set_rag_embedding_model, set_toml_table_bool, working_tree_hash,
     };
 
     fn init_git_repo(path: &std::path::Path) {
@@ -1631,6 +1666,50 @@ mod tests {
             inner
                 .canonicalize()
                 .expect("inner path should canonicalize")
+        );
+    }
+
+    #[test]
+    fn find_project_root_accepts_punchcard_config_without_git() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        let root = temporary.path().join("workspace");
+        let nested = root.join("repo/src");
+        fs::create_dir_all(root.join(".punchcard")).expect("punchcard dir should be created");
+        fs::create_dir_all(&nested).expect("nested tree should be created");
+        fs::write(
+            root.join(".punchcard/config.toml"),
+            b"[project]\nname = \"workspace\"\n",
+        )
+        .expect("config should be written");
+
+        let resolved = find_project_root(&nested).expect("punchcard root should resolve");
+
+        assert_eq!(
+            resolved,
+            root.canonicalize().expect("root should canonicalize")
+        );
+    }
+
+    #[test]
+    fn find_project_root_prefers_workspace_config_over_nested_git() {
+        let temporary = tempdir().expect("temporary directory should exist");
+        let root = temporary.path().join("workspace");
+        let repo = root.join("repo");
+        let nested = repo.join("src");
+        fs::create_dir_all(root.join(".punchcard")).expect("punchcard dir should be created");
+        fs::create_dir_all(&nested).expect("nested tree should be created");
+        fs::write(
+            root.join(".punchcard/config.toml"),
+            b"[project]\nname = \"workspace\"\n",
+        )
+        .expect("config should be written");
+        init_git_repo(&repo);
+
+        let resolved = find_project_root(&nested).expect("punchcard root should resolve");
+
+        assert_eq!(
+            resolved,
+            root.canonicalize().expect("root should canonicalize")
         );
     }
 
