@@ -49,7 +49,7 @@ Punchcard deck precedes CodeGraph; CodeGraph precedes Grep.
 
 **Retrieval budget:** one `get_context` per task; prefer `read_doc` / `read_memory` on known refs before new searches; no repeat `get_context` or rephrase-pad searches.
 
-**Governed:** `start_change` **Evidence** cites deck/memory when Discover ran; `run_validation` each required name from `.punchcard/config.toml` before `save_memory`.
+**Governed:** `start_change`: What/Why/Where only — no Evidence/Learned/Resolution lines. Cite discovery refs via `save_task_note` or Why/Where; `run_validation` before `save_memory`.
 
 **Micro-change** (one file, ~15 lines or fewer, no new API/invariant): still `start_change` → validations → `save_memory`; skip `open_task` and heavy session ceremony unless promoting durable memory or the user asked for it.
 

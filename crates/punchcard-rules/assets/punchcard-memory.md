@@ -31,7 +31,7 @@ section — **leads, not facts**. Promote only in the repo you are editing.
 
 Confirm `project_root` from `start_change` / `run_validation` matches the edited repo.
 `save_memory` `files` are optional; paths must exist under `project_root`.
-`start_change` **Evidence** must cite deck items or memory consulted when Discover ran.
+After Discover, cite deck/memory in `save_task_note` (`discovery`) or Why/Where — no `Evidence:` line in the draft.
 
 ## Working memory (session/task)
 

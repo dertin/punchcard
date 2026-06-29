@@ -830,7 +830,8 @@ fn command_change(cli: &Cli, command: ChangeCommand) -> Result<()> {
     let context = open_project(cli)?;
     match command {
         ChangeCommand::Begin(arguments) => {
-            validate_draft_change_summary(&arguments.summary).map_err(|error| anyhow::anyhow!(error))?;
+            validate_draft_change_summary(&arguments.summary)
+                .map_err(|error| anyhow::anyhow!(error))?;
             let intent = ChangeIntent {
                 id: ChangeId::new(),
                 project_id: context.id,

@@ -181,7 +181,8 @@ struct ContextPrepareInput {
 struct ChangeBeginInput {
     /// Compact title: verb + outcome (searchable).
     title: String,
-    /// Structured summary. Use What / Why / Where lines; Learned is appended at promote time.
+    /// Structured summary. Use What / Why / Where lines only; `Evidence:`, `Learned:`, and
+    /// `Resolution:` are rejected at draft time and reserved for promotion.
     summary: String,
     /// implementation, decision, constraint, failure, or `document_reference`.
     #[serde(default = "default_implementation")]

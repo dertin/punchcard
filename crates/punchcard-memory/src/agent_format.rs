@@ -345,8 +345,7 @@ pub fn validate_draft_change_summary(summary: &str) -> Result<(), String> {
             || trimmed.starts_with("Evidence:")
         {
             return Err(
-                "draft change summary must not include Learned, Resolution, or Evidence"
-                    .to_owned(),
+                "draft change summary must not include Learned, Resolution, or Evidence".to_owned(),
             );
         }
         has_what |= trimmed.starts_with("What:");
